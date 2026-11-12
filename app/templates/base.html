@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="{{ lang }}" dir="{{ 'rtl' if rtl else 'ltr' }}">
+<head>
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+ <meta name="theme-color" content="#102b42">
+ <title>{% block title %}CertiGov{% endblock %} · Certificate Platform</title>
+ <link rel="stylesheet" href="{{ url_for('static',path='style.css') }}">
+</head>
+<body class="{% if user %}logged-in{% else %}public{% endif %}" data-lang="{{ lang }}">
+<header class="topbar">
+ <a class="brand" href="/"><span class="brand-mark">C<span>✓</span></span><span>CertiGov<small>TRUSTED CREDENTIALS</small></span></a>
+ <div class="top-actions">
+  <span class="top-tag">{{ t('Certificate Management & Verification') }}</span>
+  <div class="language-picker" aria-label="Language">
+  {% for k,v in languages.items() %}<a href="/language/{{ k }}" class="{% if k==lang %}selected{% endif %}" lang="{{ k }}">{{ v }}</a>{% endfor %}
+  </div>
+  {% if user %}<div class="user-chip"><span class="user-avatar">{{ user.full_name[:1].upper() }}</span><span class="user-name">{{ user.full_name }}<small>{{ user.role|replace('_',' ')|title }}</small></span></div>
+  <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="logout" title="{{ t('Sign out') }}" aria-label="{{ t('Sign out') }}">⏻</button></form>
+  {% else %}<a class="btn btn-sm btn-outline" href="/login">{{ t('Sign in') }}</a>{% endif %}
+ </div>
+</header>
+<div class="app-shell">
+{% if user %}
+ <aside class="sidebar">
+  <div class="nav-section">{{ t('Overview') }}</div>
+  <nav>
+  {% if user.role=='superadmin' %}
+   <a href="/admin" class="navlink {% if request.url.path=='/admin' %}on{% endif %}"><span class="nav-icon">▦</span>{{ t('Dashboard') }}</a>
+   <a href="/admin/organizations" class="navlink {% if '/admin/organizations' in request.url.path %}on{% endif %}"><span class="nav-icon">▤</span>{{ t('Organizations') }}</a>
+   <a href="/admin/users" class="navlink {% if request.url.path=='/admin/users' %}on{% endif %}"><span class="nav-icon">◉</span>{{ t('Users') }}</a>
+   <a href="/admin/plans" class="navlink {% if request.url.path=='/admin/plans' %}on{% endif %}"><span class="nav-icon">◈</span>{{ t('Plans') }}</a>
+   <a href="/admin/subscriptions" class="navlink {% if request.url.path=='/admin/subscriptions' %}on{% endif %}"><span class="nav-icon">▣</span>{{ t('Billing') }}</a>
+   <a href="/admin/audit" class="navlink {% if request.url.path=='/admin/audit' %}on{% endif %}"><span class="nav-icon">≡</span>{{ t('Audit Log') }}</a>
+  {% else %}
+   <a href="/dashboard" class="navlink {% if request.url.path=='/dashboard' %}on{% endif %}"><span class="nav-icon">▦</span>{{ t('Dashboard') }}</a>
+   <div class="nav-section">{{ t('Certificates') }}</div>
+   <a href="/certificates" class="navlink {% if request.url.path=='/certificates' %}on{% endif %}"><span class="nav-icon">▤</span>{{ t('Certificates') }}</a>
+   {% if user.role in ('org_admin','issuer') %}
+   <a href="/certificates/new" class="navlink {% if request.url.path=='/certificates/new' %}on{% endif %}"><span class="nav-icon">＋</span>{{ t('Issue Certificate') }}</a>
+   <a href="/certificates/bulk" class="navlink {% if request.url.path=='/certificates/bulk' %}on{% endif %}"><span class="nav-icon">⇧</span>{{ t('Bulk Import') }}</a>
+   {% endif %}
+   <div class="nav-section">{{ t('Designer') }}</div>
+   <a href="/templates" class="navlink {% if request.url.path=='/templates' %}on{% endif %}"><span class="nav-icon">▥</span>{{ t('Templates') }}</a>
+   <a href="/templates/catalog" class="navlink {% if '/templates/catalog' in request.url.path %}on{% endif %}"><span class="nav-icon">◇</span>{{ t('Template Library') }}</a>
+   <div class="nav-section">{{ t('Organization') }}</div>
+   <a href="/team" class="navlink {% if request.url.path=='/team' %}on{% endif %}"><span class="nav-icon">◉</span>{{ t('Team') }}</a>
+   <a href="/branding" class="navlink {% if request.url.path=='/branding' %}on{% endif %}"><span class="nav-icon">◐</span>{{ t('Branding') }}</a>
+   <a href="/billing" class="navlink {% if request.url.path=='/billing' %}on{% endif %}"><span class="nav-icon">▣</span>{{ t('Billing') }}</a>
+   <a href="/audit" class="navlink {% if request.url.path=='/audit' %}on{% endif %}"><span class="nav-icon">≡</span>{{ t('Audit Log') }}</a>
+  {% endif %}
+   <a href="/profile" class="navlink {% if request.url.path=='/profile' %}on{% endif %}"><span class="nav-icon">⚙</span>{{ t('My Profile') }}</a>
+  </nav>
+  <div class="side-note"><strong>◈ CERTIGOV</strong><small>{{ t('Secure. Verified. Beautiful.') }}</small></div>
+ </aside>
+{% endif %}
+<main class="main {% if not user %}full-main{% endif %}">
+{% if flash %}<div class="flash {{ flash.kind }}" role="alert">{{ t(flash.text) }}</div>{% endif %}
+{% block content %}{% endblock %}
+<footer class="footer"><span>© 2026 CertiGov · Secure Credential Infrastructure</span><span>English · پښتو · دری</span></footer>
+</main></div>
+<script src="{{ url_for('static',path='app.js') }}" defer></script>
+{% block scripts %}{% endblock %}
+</body></html>

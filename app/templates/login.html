@@ -1,0 +1,6 @@
+{% extends 'base.html' %}{% block title %}{{ t('Sign in') }}{% endblock %}{% block content %}
+<div class="auth-container"><div class="auth-card"><span class="auth-icon">C✓</span><h1>{{ t('Welcome back') }}</h1><p>{{ t('Certificate Management & Verification') }}</p>
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+<form action="/login" method="post" class="form-stack"><input type="hidden" name="csrf" value="{{ csrf }}"><label>{{ t('Email') }}<input name="email" type="email" autocomplete="username" required placeholder="admin@organization.org"></label><label>{{ t('Password') }}<input name="password" type="password" autocomplete="current-password" required placeholder="••••••••••••"></label><button class="btn btn-primary btn-wide">{{ t('Sign in') }} <span>→</span></button></form>
+<div class="auth-foot">{{ t("Access is provisioned by the platform administrator. No public registration.") }}</div>
+</div></div>{% endblock %}

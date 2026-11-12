@@ -1,0 +1,13 @@
+{% extends 'base.html' %}{% block content %}
+<section class="hero">
+ <div class="hero-copy">
+  <span class="eyebrow">DIGITAL CERTIFICATE INFRASTRUCTURE</span>
+  <h1>{{ t('Create trusted certificates in minutes') }}</h1>
+  <p>{{ t('For universities, schools, government and businesses') }}. Design multilingual certificates, issue securely, and verify instantly from any QR scan.</p>
+  <div class="hero-actions"><a class="btn btn-primary btn-lg" href="/login">{{ t('Sign in') }} <span>↗</span></a><a class="btn btn-light btn-lg" href="#verification">{{ t('Explore verification') }}</a></div>
+  <div class="hero-stats"><div><strong>500</strong><small>Designs per sector</small></div><div><strong>3</strong><small>Languages with RTL</small></div><div><strong>24/7</strong><small>QR verification</small></div></div>
+ </div>
+ <div class="hero-preview"><div class="sample-cert"><div class="sample-frame"><span class="sample-logo">◆</span><p class="sample-org">GLOBAL EDUCATION INSTITUTE</p><div class="sample-rule"></div><h2>CERTIFICATE<br>OF EXCELLENCE</h2><p>This certificate is proudly presented to</p><h3>Student Name</h3><p>For outstanding academic achievement</p><div class="sample-bottom"><span>November 2026</span><span class="sample-sign">Authorized Signature</span><div class="qr-visual">▦<small>VERIFY</small></div></div></div></div><div class="preview-caption"><span class="live-dot"></span> {{ t("Certificate preview · QR secured") }}</div></div>
+</section>
+<section class="features" id="verification"><div><span class="feature-icon">◈</span><h3>{{ t("Design your way") }}</h3><p>{{ t("Choose 500 configurable styles per organization type, import a PDF/JPG/PNG background, or drag your own fields.") }}</p></div><div><span class="feature-icon">▣</span><h3>{{ t("Issue with control") }}</h3><p>{{ t("Teams, approval-based subscriptions, bulk CSV, unique serials, audit history and revocation.") }}</p></div><div><span class="feature-icon">✓</span><h3>{{ t("Verify in seconds") }}</h3><p>{{ t("Every QR opens a live public authenticity check. Review recipient, issuer, validity, and document fingerprint.") }}</p></div></section>
+{% endblock %}

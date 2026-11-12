@@ -1,0 +1,17 @@
+# For a local demo on Windows / Linux with Docker Desktop: no public Internet exposure.
+services:
+  app:
+    build: .
+    environment:
+      DATABASE_URL: sqlite:////srv/app/data/certigov.db
+      APP_SECRET: ${APP_SECRET:?Configure APP_SECRET in .env}
+      CERT_SIGNING_KEY: ${CERT_SIGNING_KEY:?Configure CERT_SIGNING_KEY in .env}
+      PUBLIC_BASE_URL: http://127.0.0.1:8000
+      DATA_DIR: /srv/app/data
+      PRODUCTION: "false"
+    volumes:
+      - demo_data:/srv/app/data
+    ports:
+      - '127.0.0.1:8000:8000'
+volumes:
+  demo_data:

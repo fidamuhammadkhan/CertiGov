@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: certigov-platform
+    runtime: docker
+    plan: free
+    dockerCommand: sh start-render.sh
+    healthCheckPath: /
+    envVars:
+      - key: PRODUCTION
+        value: "true"
+      - key: STORAGE_BACKEND
+        value: database
+      - key: APP_SECRET
+        generateValue: true
+      - key: CERT_SIGNING_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: INITIAL_ADMIN_EMAIL
+        sync: false
+      - key: INITIAL_ADMIN_PASSWORD
+        sync: false
+      - key: INITIAL_ADMIN_NAME
+        value: Platform Owner
+# PUBLIC_BASE_URL intentionally omitted: app uses Render's HTTPS RENDER_EXTERNAL_URL.
+# Keep one service and one persistent Neon PostgreSQL database on free plans.
