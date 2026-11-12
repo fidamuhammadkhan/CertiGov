@@ -26,13 +26,23 @@ from .rendering import FILES_DIR, CERT_DIR, save_certificate_pdf
 from .assets import safe_upload
 
 ROOT = Path(__file__).resolve().parent
+
+def configured_public_origin():
+    explicit = os.getenv('PUBLIC_BASE_URL', '').strip() or os.getenv('RENDER_EXTERNAL_URL', '').strip()
+    if explicit:
+        return explicit.rstrip('/')
+    hostname = os.getenv('VERCEL_PROJECT_PRODUCTION_URL', '').strip() or os.getenv('VERCEL_URL', '').strip()
+    if hostname:
+        return 'https://' + hostname.lstrip('/').removeprefix('https://').removeprefix('http://').rstrip('/')
+    return ''
+
 PRODUCTION = os.getenv('PRODUCTION','false').lower() == 'true'
 if PRODUCTION and (
     len(SECRET)<40 or len(SIGNING_KEY)<40 or SECRET==SIGNING_KEY
     or SECRET.startswith(('DEV-','REPLACE')) or SIGNING_KEY.startswith(('DEV-','REPLACE'))
 ):
     raise RuntimeError('Set unique APP_SECRET and CERT_SIGNING_KEY before production deployment')
-if PRODUCTION and not (os.getenv('PUBLIC_BASE_URL','') or os.getenv('RENDER_EXTERNAL_URL','')).startswith('https://'):
+if PRODUCTION and not configured_public_origin().startswith('https://'):
     raise RuntimeError('PUBLIC_BASE_URL must use HTTPS in production')
 
 
@@ -203,9 +213,7 @@ def verification_state(cert):
 
 
 def public_base_url(request):
-    base = (os.getenv('PUBLIC_BASE_URL', '').strip() or
-            os.getenv('RENDER_EXTERNAL_URL', '').strip() or
-            str(request.base_url).rstrip('/'))
+    base = configured_public_origin() or str(request.base_url).rstrip('/')
     if PRODUCTION and not base.startswith('https://'):
         raise RuntimeError('Public verification requires HTTPS')
     return base.rstrip('/')
