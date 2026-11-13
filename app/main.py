@@ -58,16 +58,33 @@ DEFAULT_SITE = {
     'facebook':'', 'instagram':'', 'linkedin':'', 'youtube':'', 'x':'', 'whatsapp':'',
     'primary_color':'#102f49', 'accent_color':'#d6a659', 'background_color':'#f6f8fb',
     'hero_style':'aurora', 'font_style':'modern', 'logo_text':'CG',
+    'default_theme':'ocean', 'default_mode':'light',
 }
 SITE_TEXT_FIELDS = {'brand_name':60,'tagline':120,'hero_title':130,'hero_text':500,'about_title':150,
  'about_text':3000,'why_text':3000,'mission_text':3000,'contact_email':254,'phone':80,
  'address':300,'logo_text':3}
+# Per-language overrides are optional. When blank, a translated standard message is used.
+SITE_LOCALIZABLE = ('tagline','hero_title','hero_text','about_title','about_text','why_text','mission_text')
+for _site_key in SITE_LOCALIZABLE:
+    for _site_lang in ('ps','fa'):
+        SITE_TEXT_FIELDS[f'{_site_key}_{_site_lang}'] = SITE_TEXT_FIELDS[_site_key]
+THEME_PRESETS = ('ocean','midnight','emerald','rose','violet','sand','sunset','forest','slate','azure','copper','graphite')
 SITE_LINK_FIELDS = ('facebook','instagram','linkedin','youtube','x','whatsapp')
 SITE_PALETTES = ('primary_color','accent_color','background_color')
 
 def website_settings(db):
     record=db.get(WebsiteSettings,1)
     return {**DEFAULT_SITE, **(record.values if record and isinstance(record.values,dict) else {})}
+
+
+def website_for_language(settings, lang):
+    # Copy, never mutate stored administrator settings or leak one language into another.
+    data = dict(settings)
+    if lang in ('ps','fa'):
+        for key in SITE_LOCALIZABLE:
+            explicit = str(settings.get(f'{key}_{lang}', '')).strip()
+            data[key] = explicit or translate(str(settings.get(key, '')), lang)
+    return data
 
 def safe_site_url(value):
     value=(value or '').strip()[:350]
@@ -115,7 +132,7 @@ async def validate_csrf(request: Request):
             raise HTTPException(status_code=403,detail='CSRF validation failed. Refresh the page.')
 
 
-app = FastAPI(title='CertiGov — Certificate Issuance and Verification', version='1.0.0', lifespan=lifespan,
+app = FastAPI(title='CertiGov — Certificate Issuance and Verification', version='4.0.0', lifespan=lifespan,
               dependencies=[Depends(validate_csrf)],
               docs_url=None if PRODUCTION else '/api/docs', redoc_url=None)
 app.add_middleware(SessionMiddleware,secret_key=SECRET,session_cookie='certigov_session',
@@ -188,16 +205,17 @@ def go(path):
     return RedirectResponse(path,status_code=303)
 
 
-def render(req, filename, db=None, user=None, status_code=200, **extra):
+def render(req, filename, db=None, user=None, status_code=200, public=False, **extra):
     lang=req.session.get('lang','en')
     if lang not in LANGUAGES: lang='en'
-    if user is None and db:
+    if user is None and db and not public:
         uid=req.session.get('user_id')
         user=db.get(User,uid) if uid else None
     context={'request':req,'user':user,'lang':lang,'rtl':lang in ('ps','fa'),
       't':lambda s:translate(s,lang),'languages':LANGUAGES,
       'categories':CATEGORIES,'flash':req.session.pop('flash',None), 'csrf':csrf_token(req),
-      'site':website_settings(db) if db is not None else DEFAULT_SITE}
+      'site':website_for_language(website_settings(db) if db is not None else DEFAULT_SITE, lang),
+      'theme_presets': THEME_PRESETS}
     context.update(extra)
     return templates.TemplateResponse(req,filename,context,status_code=status_code)
 
@@ -304,21 +322,21 @@ async def web_error(req,exc):
 
 @app.get('/',response_class=HTMLResponse)
 def home(req:Request,db:Session=Depends(get_db),user=Depends(current_user)):
-    if user:return go('/admin' if user.role=='superadmin' else '/dashboard')
-    return render(req,'home.html',db=db,plans=db.query(Plan).filter_by(is_active=True).order_by(Plan.price_usd).all())
+    if user and req.query_params.get('preview')!='1':return go('/admin' if user.role=='superadmin' else '/dashboard')
+    return render(req,'home.html',db=db,public=True,plans=db.query(Plan).filter_by(is_active=True).order_by(Plan.price_usd).all())
 
 
 @app.get('/plans',response_class=HTMLResponse)
 def public_plans(req:Request,db:Session=Depends(get_db),user=Depends(current_user)):
     plans=db.query(Plan).filter_by(is_active=True).order_by(Plan.price_usd).all()
-    return render(req,'public_plans.html',db=db,user=user,plans=plans)
+    return render(req,'public_plans.html',db=db,public=True,plans=plans)
 
 
 @app.get('/signup',response_class=HTMLResponse)
 def public_signup(req:Request,plan_id:int=0,db:Session=Depends(get_db),user=Depends(current_user)):
     plans=db.query(Plan).filter_by(is_active=True).order_by(Plan.price_usd).all()
     selected=db.get(Plan,plan_id) if plan_id else (plans[0] if plans else None)
-    return render(req,'signup.html',db=db,user=user,plans=plans,selected=selected)
+    return render(req,'signup.html',db=db,public=True,plans=plans,selected=selected)
 
 
 @app.post('/signup')
@@ -360,12 +378,12 @@ def public_signup_submit(req:Request,plan_id:int=Form(...),organization_name:str
 
 @app.get('/about',response_class=HTMLResponse)
 def public_about(req:Request,db:Session=Depends(get_db),user=Depends(current_user)):
-    return render(req,'about.html',db=db,user=user)
+    return render(req,'about.html',db=db,public=True)
 
 
 @app.get('/contact',response_class=HTMLResponse)
 def public_contact(req:Request,db:Session=Depends(get_db),user=Depends(current_user)):
-    return render(req,'contact.html',db=db,user=user)
+    return render(req,'contact.html',db=db,public=True)
 
 
 @app.post('/contact')
@@ -387,7 +405,7 @@ def public_contact_submit(req:Request,name:str=Form(...),email:str=Form(...),
 
 @app.get('/admin/website')
 def admin_website(req:Request,db:Session=Depends(get_db),user=Depends(need_admin)):
-    return render(req,'admin_website.html',db=db,user=user)
+    return render(req,'admin_website.html',db=db,user=user,source_site=website_settings(db))
 
 
 @app.post('/admin/website')
@@ -406,6 +424,8 @@ async def admin_website_save(req:Request,db:Session=Depends(get_db),user=Depends
         updated[key]=value
     updated['hero_style']=str(form.get('hero_style','aurora')) if str(form.get('hero_style','aurora')) in ('aurora','minimal','editorial','midnight') else 'aurora'
     updated['font_style']=str(form.get('font_style','modern')) if str(form.get('font_style','modern')) in ('modern','classic','rounded') else 'modern'
+    updated['default_theme']=str(form.get('default_theme','ocean')) if str(form.get('default_theme','ocean')) in THEME_PRESETS else 'ocean'
+    updated['default_mode']=str(form.get('default_mode','light')) if str(form.get('default_mode','light')) in ('light','dark') else 'light'
     record=db.get(WebsiteSettings,1)
     if record:record.values={**current,**updated}
     else:db.add(WebsiteSettings(id=1,values={**current,**updated}))
@@ -695,8 +715,15 @@ def template_import_submit(req:Request,name:str=Form(...),orientation:str=Form('
     template=CertificateTemplate(organization_id=org.id,category=org.category,
        name=name.strip(), config=make_design(org.category, 3,req.session.get('lang','en')),
        created_by=user.id)
-    template.config={**template.config,'orientation':orientation if orientation in ('portrait','landscape') else 'landscape',
-                     'catalog_index':None,'composition':4,'frame':2}
+    # Uploaded artwork may already contain logos, names and titles. Never stack the
+    # catalog's text on it. Start with one movable QR and optionally add fields.
+    background_config=template.config.copy()
+    background_config.update({'orientation':orientation if orientation in ('portrait','landscape') else 'landscape',
+                     'catalog_index':None,'composition':4,'frame':2,
+                     'artwork_mode':True,'background_fit':'contain',
+                     'elements':[{'kind':'qr','text':'{{qr}}','x':83,'y':72,'w':13,
+                                  'size':17,'color':'#122b40','weight':'normal','align':'center','visible':True}]})
+    template.config=sanitize_design(background_config)
     # safe_upload converts uploaded PDF page 1 or a JPG/PNG into a constrained PNG.
     template.background_path=safe_upload(background,allow_pdf=True,db=db,organization_id=org.id)
     db.add(template);db.flush()
@@ -733,6 +760,20 @@ def catalog_choose(req:Request,category:str=Form(...),number:int=Form(...),name:
 def template_list(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
     items=db.query(CertificateTemplate).filter_by(organization_id=user.organization_id).order_by(CertificateTemplate.id.desc()).all()
     return render(req,'templates.html',db=db,user=user,items=items)
+
+
+@app.post('/templates/{template_id}/clean-artwork')
+def clean_imported_artwork(req: Request, template_id: int, db:Session=Depends(get_db),user=Depends(need_editor)):
+    template=assert_tenant(db.get(CertificateTemplate,template_id),user)
+    if not template.background_path: raise HTTPException(400,'This template has no uploaded artwork')
+    config=dict(template.config)
+    qr=next((dict(e) for e in config.get('elements',[]) if e.get('kind')=='qr'),None)
+    if not qr: qr={'kind':'qr','text':'{{qr}}','x':83,'y':72,'w':13,'size':17,'color':'#122b40','weight':'normal','align':'center','visible':True}
+    config.update({'artwork_mode':True,'background_fit':'contain','elements':[qr]})
+    template.config=sanitize_design(config)
+    audit(db,req,user,'template.artwork.cleaned',str(template.id))
+    db.commit();flash(req,'Artwork reset to QR only. You can now add only the fields you need.')
+    return go(f'/templates/{template.id}/edit')
 
 
 @app.get('/templates/{template_id}/edit')

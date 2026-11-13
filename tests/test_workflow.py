@@ -267,3 +267,93 @@ def test_public_signup_contact_website_and_custom_import():
     bad={**fields,'facebook':'javascript:alert(1)'}
     assert c.post('/admin/website',data=bad).status_code==400
     assert c.post('/admin/website',data={k:v for k,v in fields.items() if k!='csrf'}).status_code==403
+
+
+def test_v4_public_translations_and_artwork_design():
+  """QR-only import prevents duplicating preprinted names; public translations are real."""
+  from app.models import WebsiteSettings
+  from app.catalog import sanitize_design
+  from app.rendering import certificate_html
+  from types import SimpleNamespace
+  from PIL import Image
+  import re
+  with TestClient(app) as c:
+    # The public visitor sees translated real headings, not only an RTL header.
+    for code,hero,about in [
+      ('ps','د باور وړ ډیجیټلي سندونه','د باوري سندونو لپاره یو ګډ مرکز'),
+      ('fa','اسناد دیجیتالی قابل اعتماد','یک مرکز برای تصدیق‌نامه‌های معتبر')]:
+      c.get('/language/'+code)
+      with SessionLocal() as db:
+        setting=db.get(WebsiteSettings,1)
+        if setting:
+          settings=dict(setting.values)
+          # English editable content can have explicit localized variants.
+          settings['hero_title_'+code]=hero
+          settings['about_title_'+code]=about
+          setting.values=settings;db.commit()
+      home=c.get('/').text
+      assert '<html lang="'+code+'" dir="rtl"' in home
+      assert hero in home
+      assert '>' + ('زموږ په اړه' if code=='ps' else 'درباره ما') + '</a>' in home
+      assert 'id="theme-mode-toggle"' in home
+      assert 'id="ui-theme"' in home
+      assert '<h1>'+about+'</h1>' in c.get('/about').text
+      for route in ['/plans','/contact','/signup']:
+        assert c.get(route).status_code==200
+    c.get('/language/en')
+    token=csrf(c)
+    response=c.post('/signup',data={
+       'csrf':token,'plan_id':1,'organization_name':'Demo Artworks Studio',
+       'category':'university','admin_name':'Template Designer',
+       'email':'v4-designer@example.test','password':'Test-V4-Designer-Pass-2026',
+       'phone':''},follow_redirects=True)
+    assert response.status_code==200
+    token=csrf(c)
+    login(c,'v4-designer@example.test','Test-V4-Designer-Pass-2026',token)
+    token=csrf(c)
+    sample=io.BytesIO()
+    Image.new('RGB',(960,740),(233,224,198)).save(sample,'PNG')
+    response=c.post('/templates/import',data={'csrf':token,'name':'Preprinted scanned artwork','orientation':'landscape'},
+          files={'background':('design.png',sample.getvalue(),'image/png')},follow_redirects=True)
+    assert response.status_code==200
+    with SessionLocal() as db:
+      template=db.query(CertificateTemplate).filter_by(name='Preprinted scanned artwork').one()
+      org=db.get(Organization,template.organization_id)
+      assert template.config['artwork_mode'] is True
+      assert template.config['background_fit']=='contain'
+      assert len(template.config['elements'])==1
+      assert template.config['elements'][0]['kind']=='qr'
+      tmpl_id=template.id
+      cfg=template.config
+      fake=SimpleNamespace(language='en',recipient_en='Should not overlay',recipient_ps='',recipient_fa='',award='Should not overlay',
+          program='',issue_date=__import__('datetime').date(2026,11,13),valid_until=None,serial='TST-2026-1',snapshot={'config':cfg})
+      markup=certificate_html(fake,org,cfg,template.background_path,'','',
+                  'https://certigov-platform.onrender.com/verify/sample-public-token',db=db)
+      assert 'Should not overlay' not in markup
+      assert 'background-size:contain' in markup
+      assert 'background-image:url(' in markup
+      assert 'data:image/png;base64' in markup
+      assert 'outline:3px' not in markup
+    # A cover region can be positioned over old printed text in an uploaded design.
+    mask={**cfg,'elements':cfg['elements']+[{'kind':'mask','text':'','x':10,'y':20,'w':60,'h':13,
+       'size':8,'color':'#e9e0c6','weight':'normal','align':'center','visible':True}]}
+    cleaned=sanitize_design(mask)
+    assert cleaned['elements'][1]['kind']=='mask'
+    token=csrf(c)
+    response=c.post(f'/templates/{tmpl_id}/edit',data={'csrf':token,'name':'Preprinted scanned artwork',
+       'design_json':json.dumps(cleaned)},follow_redirects=True)
+    assert response.status_code==200
+    with SessionLocal() as db:
+      assert len(db.get(CertificateTemplate,tmpl_id).config['elements'])==2
+    response=c.post(f'/templates/{tmpl_id}/clean-artwork',data={'csrf':token},follow_redirects=True)
+    assert response.status_code==200
+    with SessionLocal() as db:
+      updated=db.get(CertificateTemplate,tmpl_id)
+      assert updated.background_path and len(updated.config['elements'])==1
+      assert updated.config['elements'][0]['kind']=='qr'
+    # A different organization cannot reset another institution's imported template.
+    c.post('/logout',data={'csrf':token})
+    token=csrf(c)
+    login(c,'other@example.test','Other-Admin-New-Strong-2026',token)
+    token=csrf(c)
+    assert c.post(f'/templates/{tmpl_id}/clean-artwork',data={'csrf':token}).status_code==404

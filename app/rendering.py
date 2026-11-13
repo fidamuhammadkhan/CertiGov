@@ -83,6 +83,8 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
         f'background-image:linear-gradient(90deg,{c["primary"]} 0 4%,{c["paper"]} 4% 100%);',
         f'background-image:linear-gradient(135deg,{c["paper"]} 85%,{c["accent"]}33 85%);',
     ]
+    if bg and c['artwork_mode']:
+        frame_styles = '' # Full imported art remains unchanged by platform borders.
     motif=motifs[c['pattern']] if not bg else ''
     rtl = cert.language in ('ps','fa')
     rendered=[]
@@ -93,8 +95,12 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
              f"font-size:{item['size']}px;color:{item['color']};text-align:{item['align']};"
              f"font-weight:{item['weight']};")
         content=''
+        if kind == 'mask':
+            css += f"height:{item['h']}%;background-color:{item['color']};"
         if kind == 'line':
             content=f'<div style="width:100%;border-top:2px solid {c["accent"]}"></div>'
+        elif kind == 'mask':
+            content = ''
         elif kind == 'logo':
             content=f'<img alt="logo" src="{logo}" style="max-width:100%;max-height:100%;height:auto;object-fit:contain">' if logo else '<span>◆</span>'
         elif kind == 'signature':
@@ -105,7 +111,8 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
             txt = html.escape(cert_text(cert,org,item['text']))
             content=f'<span>{txt}</span>'
         rendered.append(f'<div class="element {kind}" dir="{"rtl" if rtl else "ltr"}" style="{css}">{content}</div>')
-    bg_css = f'background-image:url("{bg}");background-size:100% 100%;background-repeat:no-repeat;' if bg else ''
+    background_fit={'contain':'contain','cover':'cover','stretch':'100% 100%'}[c['background_fit']]
+    bg_css = f'background-image:url("{bg}");background-size:{background_fit};background-position:center;background-repeat:no-repeat;' if bg else ''
     return f'''<!doctype html><html lang="{html.escape(cert.language)}"><head><meta charset="utf-8">
     <style>@page{{size:{paper_size};margin:0}}html,body{{margin:0;padding:0}}
     body{{font-family:'Noto Sans Arabic','Noto Naskh Arabic','DejaVu Sans',sans-serif}}
@@ -113,7 +120,7 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
       background-color:{c['paper']};{frame_styles}{motif}{bg_css}}}
     .element{{position:absolute;box-sizing:border-box;line-height:1.36;word-break:normal;overflow-wrap:anywhere;}}
     .element.qr img{{display:block}}.element.logo,.element.signature{{height:14%}}
-    .element.qr{{height:20%}}.element.line{{height:1%}}
+    .element.qr{{height:20%;background:#fff;padding:3px}}.element.line{{height:1%}}
     </style></head><body><div class="sheet">{''.join(rendered)}</div></body></html>'''
 
 

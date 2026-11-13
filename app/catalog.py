@@ -116,7 +116,7 @@ def make_design(category='university', index=1, language='en'):
 def sanitize_design(obj):
     """Accept only structural, bounded editor JSON; no HTML/CSS/URLs from users."""
     if not isinstance(obj, dict): raise ValueError('Invalid design JSON')
-    allowed_kind = {'text','qr','logo','signature','line'}
+    allowed_kind = {'text','qr','logo','signature','line','mask'}
     out = {k: obj.get(k) for k in ('version','catalog_index','category','language')}
     for prop in ('paper','primary','accent'):
         value = obj.get(prop, '#ffffff')
@@ -127,6 +127,8 @@ def sanitize_design(obj):
     out['composition']=min(9,max(0,int(obj.get('composition',0))))
     out['pattern']=min(4,max(0,int(obj.get('pattern',0))))
     out['orientation'] = obj.get('orientation') if obj.get('orientation') in ('portrait','landscape') else 'landscape'
+    out['artwork_mode'] = bool(obj.get('artwork_mode',False))
+    out['background_fit'] = obj.get('background_fit') if obj.get('background_fit') in ('contain','cover','stretch') else 'contain'
     arr = obj.get('elements', [])
     if not isinstance(arr,list) or len(arr)>45: raise ValueError('Too many fields')
     out['elements'] = []
@@ -136,9 +138,9 @@ def sanitize_design(obj):
             try: return max(0, min(maximum, float(e.get(name,default))))
             except (ValueError,TypeError): return default
         out['elements'].append({'id': f'field_{i}', 'kind':e['kind'],
-          'text':str(e.get('text',''))[:400], 'x':num('x',99,5),
-          'y':num('y',99,5),'w':max(2,num('w',100,30)),
-          'size':max(7,num('size',90,18)),
+          'text':str(e.get('text',''))[:400], 'x':min(87,num('x',99,5)) if e['kind']=='qr' else num('x',99,5),
+          'y':num('y',99,5),'w':max(13 if e['kind']=='qr' else 2,num('w',100,30)),
+          'size':max(7,num('size',90,18)), 'h':max(2,num('h',70,10)),
           'color':e['color'] if isinstance(e.get('color'),str) and len(e['color'])==7 and e['color'].startswith('#') and all(c in '0123456789abcdefABCDEF' for c in e['color'][1:]) else out['primary'],
           'weight':'bold' if e.get('weight')=='bold' else 'normal',
           'align':e.get('align') if e.get('align') in ('left','right','center') else 'center',
