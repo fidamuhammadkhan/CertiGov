@@ -5,7 +5,7 @@
  const config=JSON.parse(source.textContent);
  const canvas=document.getElementById('certificate-canvas');
  const paper=document.getElementById('paper'),primary=document.getElementById('primary'),accent=document.getElementById('accent');
- const orientation=document.getElementById('orientation'),frame=document.getElementById('frame');
+ const orientation=document.getElementById('orientation'),frame=document.getElementById('frame'),pattern=document.getElementById('pattern');
  const props=document.getElementById('element-properties');
  let selected=null;let drag=null;
  const labels={en:{certificate_title:'Certificate of Achievement',certifies:'This certifies that',org:'Your Organization',recipient:'Student Name',award:'Successfully completed the program',program:'Program Title',date:'12 November 2026'},ps:{certificate_title:'د لاسته راوړنې سند',certifies:'دا تصدیق کوي چې',org:'ستاسو اداره',recipient:'د زده کوونکي نوم',award:'پروګرام یې بشپړ کړی دی',program:'د پروګرام نوم',date:'۱۲ نومبر ۲۰۲۶'},fa:{certificate_title:'تصدیق‌نامه دستاورد',certifies:'بدینوسیله تصدیق می‌شود که',org:'نهاد شما',recipient:'نام دانشجو',award:'برنامه را موفقانه تکمیل کرده است',program:'نام برنامه',date:'۱۲ نوامبر ۲۰۲۶'}};
@@ -25,6 +25,13 @@
    canvas.classList.toggle('portrait',config.orientation==='portrait');
    paper.value=config.paper;primary.value=config.primary;accent.value=config.accent;
    orientation.value=config.orientation;frame.value=String(config.frame);
+   pattern.value=String(config.pattern||0);
+   const accent=config.accent,paper=config.paper,primary=config.primary;
+   const motifs=['none',`linear-gradient(115deg, ${paper} 75%, ${accent}22 75%)`,
+      `radial-gradient(circle at 85% 10%, ${accent}28 0%, transparent 32%)`,
+      `linear-gradient(90deg, ${primary} 0 4%, ${paper} 4% 100%)`,
+      `linear-gradient(135deg, ${paper} 85%, ${accent}33 85%)`];
+   if(!bg && !document.querySelector('input[name=background]').files.length)canvas.style.backgroundImage=motifs[config.pattern||0];
  }
  function redraw(){
    updateStyle();canvas.replaceChildren();
@@ -87,7 +94,7 @@
  }
  const bind=(element,key,convert=v=>v)=>element.addEventListener('input',e=>{config[key]=convert(e.target.value);redraw()});
  bind(paper,'paper');bind(primary,'primary');bind(accent,'accent');
- bind(orientation,'orientation');bind(frame,'frame',v=>Number(v));
+ bind(orientation,'orientation');bind(frame,'frame',v=>Number(v));bind(pattern,'pattern',v=>Number(v));
  document.getElementById('add-text').addEventListener('click',()=>{
    config.elements.push({id:'new_'+Date.now(),kind:'text',text:'Your text here',x:25,y:55,w:50,size:23,color:config.primary,weight:'normal',align:'center',visible:true});
    selected=config.elements.length-1;redraw();redrawProperties();

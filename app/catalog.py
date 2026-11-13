@@ -64,7 +64,51 @@ def make_design(category='university', index=1, language='en'):
     if layout in (5,6):
         elements[2]['x'] = 33; elements[2]['w'] = 34
         elements[3]['y'] += 2
-    return {'version': 1,'catalog_index': index,'category':category, 'language':language,
+    # Real composition families: each changes the placement and hierarchy, not just colors.
+    def pos(key,x=None,y=None,w=None,size=None,align=None):
+        e=next(z for z in elements if z['id']==key)
+        for field,value in (('x',x),('y',y),('w',w),('size',size),('align',align)):
+            if value is not None:e[field]=value
+    if layout==1:  # modern left editorial
+        pos('logo',8,7,12);pos('org',24,9,70,20,'left');pos('line',9,27,22)
+        pos('title',9,32,82,42,'left');pos('subtitle',9,50,80,18,'left')
+        pos('recipient',9,58,80,36,'left');pos('description',9,70,76,19,'left')
+        pos('program',9,78,67,15,'left');pos('signature',66,83,15)
+    elif layout==2: # dramatic center seal
+        pos('logo',46,6,8);pos('title',10,19,80,47);pos('org',12,37,76,22)
+        pos('subtitle',16,50,68,17);pos('recipient',10,56,80,42);pos('description',13,69,74,20)
+        pos('line',31,47,38)
+    elif layout==3: # asymmetric modern right
+        pos('logo',78,7,12);pos('org',7,8,65,19,'left');pos('title',7,27,74,43,'left')
+        pos('subtitle',7,44,70,17,'left');pos('recipient',7,52,77,43,'left')
+        pos('description',7,68,75,21,'left');pos('program',7,79,65,16,'left');pos('line',7,21,27)
+    elif layout==4: # stacked compact minimal
+        pos('logo',8,9,10);pos('org',22,10,68,19,'left');pos('title',15,29,70,46)
+        pos('subtitle',25,48,50,18);pos('recipient',13,56,74,41);pos('description',13,72,74,17)
+        pos('line',30,26,40);pos('serial',16,91,40,12,'left')
+    elif layout==5: # luxury upper left
+        pos('logo',9,7,11);pos('org',23,9,70,21,'left');pos('title',7,31,80,51,'left')
+        pos('subtitle',7,51,75,17,'left');pos('recipient',7,59,75,41,'left')
+        pos('description',7,74,77,21,'left');pos('line',7,27,78)
+    elif layout==6: # academic top banner
+        pos('logo',8,5,12);pos('org',24,8,65,25,'left');pos('title',12,32,76,38)
+        pos('line',25,46,50);pos('subtitle',25,52,50,18)
+        pos('recipient',12,60,76,36);pos('description',12,73,76,18)
+    elif layout==7: # art deco side balance
+        pos('logo',45,9,10);pos('org',14,23,72,23);pos('title',13,36,74,44)
+        pos('subtitle',20,52,60,19);pos('recipient',15,61,70,39)
+        pos('description',19,74,62,17);pos('line',42,31,16)
+    elif layout==8: # clean corporate letterhead
+        pos('logo',9,10,10);pos('org',23,10,68,21,'left');pos('line',9,26,82)
+        pos('title',9,36,80,39,'left');pos('subtitle',9,49,75,19,'left')
+        pos('recipient',9,58,80,36,'left');pos('description',9,72,75,19,'left')
+        pos('program',9,80,72,15,'left')
+    elif layout==9: # bold centered cover
+        pos('logo',45,6,10);pos('org',15,18,70,22);pos('title',9,33,82,49)
+        pos('subtitle',20,51,60,17);pos('recipient',13,60,74,44)
+        pos('description',18,76,64,18);pos('line',28,29,44)
+    return {'version': 2,'catalog_index': index,'category':category, 'language':language,
+       'composition':layout,'pattern':p%5,
        'paper':paper,'primary':primary,'accent':accent,'frame':frame,
        'orientation':'landscape', 'elements':elements}
 
@@ -80,6 +124,8 @@ def sanitize_design(obj):
             raise ValueError('Invalid design color')
         out[prop] = value
     out['frame'] = min(4,max(0,int(obj.get('frame',0))))
+    out['composition']=min(9,max(0,int(obj.get('composition',0))))
+    out['pattern']=min(4,max(0,int(obj.get('pattern',0))))
     out['orientation'] = obj.get('orientation') if obj.get('orientation') in ('portrait','landscape') else 'landscape'
     arr = obj.get('elements', [])
     if not isinstance(arr,list) or len(arr)>45: raise ValueError('Too many fields')

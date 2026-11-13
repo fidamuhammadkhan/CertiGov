@@ -4,11 +4,12 @@
  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
  <meta name="theme-color" content="#102b42">
  <title>{% block title %}CertiGov{% endblock %} · Certificate Platform</title>
- <link rel="stylesheet" href="{{ url_for('static',path='style.css') }}">
+ <link rel="stylesheet" href="{{ url_for('static',path='style.css') }}?v=3">
 </head>
-<body class="{% if user %}logged-in{% else %}public{% endif %}" data-lang="{{ lang }}">
+<body class="{% if user %}logged-in{% else %}public{% endif %} font-{{ site.font_style }}" data-lang="{{ lang }}" style="--site-primary:{{ site.primary_color }};--site-accent:{{ site.accent_color }};--site-bg:{{ site.background_color }}">
 <header class="topbar">
- <a class="brand" href="/"><span class="brand-mark">C<span>✓</span></span><span>CertiGov<small>TRUSTED CREDENTIALS</small></span></a>
+ <a class="brand" href="/"><span class="brand-mark">{{ site.logo_text }}<span>✓</span></span><span>{{ site.brand_name }}<small>{{ site.tagline }}</small></span></a>
+ {% if not user %}<nav class="public-nav"><a href="/">Home</a><a href="/about">About</a><a href="/plans">Plans</a><a href="/contact">Contact</a></nav>{% endif %}
  <div class="top-actions">
   <span class="top-tag">{{ t('Certificate Management & Verification') }}</span>
   <div class="language-picker" aria-label="Language">
@@ -30,6 +31,8 @@
    <a href="/admin/users" class="navlink {% if request.url.path=='/admin/users' %}on{% endif %}"><span class="nav-icon">◉</span>{{ t('Users') }}</a>
    <a href="/admin/plans" class="navlink {% if request.url.path=='/admin/plans' %}on{% endif %}"><span class="nav-icon">◈</span>{{ t('Plans') }}</a>
    <a href="/admin/subscriptions" class="navlink {% if request.url.path=='/admin/subscriptions' %}on{% endif %}"><span class="nav-icon">▣</span>{{ t('Billing') }}</a>
+   <a href="/admin/website" class="navlink {% if request.url.path=='/admin/website' %}on{% endif %}"><span class="nav-icon">◐</span>Website Studio</a>
+   <a href="/admin/messages" class="navlink {% if request.url.path=='/admin/messages' %}on{% endif %}"><span class="nav-icon">✉</span>Website Inbox</a>
    <a href="/admin/audit" class="navlink {% if request.url.path=='/admin/audit' %}on{% endif %}"><span class="nav-icon">≡</span>{{ t('Audit Log') }}</a>
   {% else %}
    <a href="/dashboard" class="navlink {% if request.url.path=='/dashboard' %}on{% endif %}"><span class="nav-icon">▦</span>{{ t('Dashboard') }}</a>
@@ -56,7 +59,7 @@
 <main class="main {% if not user %}full-main{% endif %}">
 {% if flash %}<div class="flash {{ flash.kind }}" role="alert">{{ t(flash.text) }}</div>{% endif %}
 {% block content %}{% endblock %}
-<footer class="footer"><span>© 2026 CertiGov · Secure Credential Infrastructure</span><span>English · پښتو · دری</span></footer>
+<footer class="footer"><span>© 2026 {{ site.brand_name }} · {{ site.tagline }}</span><span>{% if not user %}<a href="/about">About</a> · <a href="/plans">Plans</a> · <a href="/contact">Contact</a> · {% endif %} English · پښتو · دری</span></footer>
 </main></div>
 <script src="{{ url_for('static',path='app.js') }}" defer></script>
 {% block scripts %}{% endblock %}

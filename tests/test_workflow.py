@@ -197,3 +197,73 @@ def test_end_to_end():
     # Logo background upload and limited CSV path.
     assert c.get('/certificates/sample.csv').status_code==200
     assert make_design('school',500)['catalog_index']==500
+
+
+def test_public_signup_contact_website_and_custom_import():
+  from app.models import WebsiteSettings, WebsiteMessage
+  from PIL import Image
+  import re
+  with TestClient(app) as c:
+    assert 'Explore plans' in c.get('/').text
+    assert 'Starter' in c.get('/plans').text
+    assert c.get('/about').status_code==200
+    assert c.get('/contact').status_code==200
+    token=csrf(c)
+    response=c.post('/signup', data={'csrf':token,'plan_id':1,
+       'organization_name':'Sample Research Academy','category':'training',
+       'admin_name':'Sample Academy Admin','email':'academy@example.test',
+       'password':'A-secure-demo-password-2026','phone':'+93 000 000 000'},follow_redirects=True)
+    assert response.status_code==200,response.text[-600:]
+    assert 'Account created' in response.text
+    with SessionLocal() as db:
+       org=db.query(Organization).filter_by(name='Sample Research Academy').one()
+       sub=db.query(Subscription).filter_by(organization_id=org.id).one()
+       assert sub.status=='pending' and sub.plan_id==1
+       assert db.query(WebsiteMessage).filter_by(subject='New organization registration').count()>=1
+    # Plan remains pending; no accidental paid subscription.
+    token=csrf(c)
+    assert 'Organization Workspace' in login(c,'academy@example.test','A-secure-demo-password-2026',token).text
+    assert 'Upload own design' in c.get('/templates').text
+    assert c.get('/templates/import').status_code==200
+    token=csrf(c)
+    artwork=io.BytesIO();Image.new('RGB',(1000,700),(235,245,255)).save(artwork,format='PNG')
+    result=c.post('/templates/import',data={'csrf':token,'name':'Own institutional artwork','orientation':'landscape'},
+       files={'background':('custom.png',artwork.getvalue(),'image/png')},follow_redirects=True)
+    assert result.status_code==200,result.text[-500:]
+    with SessionLocal() as db:
+       templ=db.query(CertificateTemplate).filter_by(organization_id=org.id).one()
+       assert templ.background_path.endswith('.png')
+       assert templ.config['composition']==4
+    c.post('/logout',data={'csrf':token})
+    token=csrf(c)
+    assert c.post('/contact',data={'csrf':token,'name':'Parent Visitor','email':'visitor@example.test',
+        'subject':'Please explain verification','message':'We would like to understand QR verification.'},follow_redirects=True).status_code==200
+    with SessionLocal() as db:
+       assert db.query(WebsiteMessage).filter_by(subject='Please explain verification').count()==1
+       if not db.query(User).filter_by(email='website-root@example.test').first():
+         db.add(User(email='website-root@example.test',role='superadmin',full_name='Site Root',password_hash=password_hash('Test-Site-Root-2026')))
+         db.commit()
+    token=csrf(c)
+    assert 'Platform Control' in login(c,'website-root@example.test','Test-Site-Root-2026',token).text
+    token=csrf(c)
+    fields={'csrf':token,'brand_name':'AcademiaGov','logo_text':'AG','tagline':'Verify your education',
+      'hero_title':'A better way to issue credentials','hero_text':'Our configurable platform',
+      'about_title':'About our work','about_text':'A shared credential registry',
+      'why_text':'Verify authenticity with a public QR','mission_text':'Better access to credentials',
+      'contact_email':'info@example.test','phone':'+93 111111','address':'Sample Office',
+      'facebook':'https://www.facebook.com/example','primary_color':'#132a4d',
+      'accent_color':'#ccab66','background_color':'#f7f9ff',
+      'hero_style':'midnight','font_style':'classic'}
+    r=c.post('/admin/website',data=fields,follow_redirects=True)
+    assert r.status_code==200,r.text[-350:]
+    assert 'AcademiaGov' in c.get('/').text
+    assert 'info@example.test' in c.get('/contact').text
+    assert 'https://www.facebook.com/example' in c.get('/contact').text
+    assert 'AcademiaGov' in c.get('/about').text
+    assert 'New organization registration' in c.get('/admin/messages').text
+    with SessionLocal() as db:
+       st=db.get(WebsiteSettings,1)
+       assert st.values['hero_style']=='midnight'
+    bad={**fields,'facebook':'javascript:alert(1)'}
+    assert c.post('/admin/website',data=bad).status_code==400
+    assert c.post('/admin/website',data={k:v for k,v in fields.items() if k!='csrf'}).status_code==403

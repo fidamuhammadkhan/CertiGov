@@ -75,6 +75,15 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
       'border-top:15px solid '+c['primary']+';border-bottom:15px solid '+c['primary']+';border-left:4px solid '+c['accent']+';border-right:4px solid '+c['accent']+';',
       'border:10px ridge '+c['accent']+'; outline:2px solid '+c['primary']+';outline-offset:-19px;',
     ][c['frame']]
+    # Decorative presentation changes by family without granting arbitrary CSS/HTML input.
+    motifs=[
+        '',
+        f'background-image:linear-gradient(115deg,{c["paper"]} 75%,{c["accent"]}22 75%);',
+        f'background-image:radial-gradient(circle at 85% 10%,{c["accent"]}28 0%,transparent 32%);',
+        f'background-image:linear-gradient(90deg,{c["primary"]} 0 4%,{c["paper"]} 4% 100%);',
+        f'background-image:linear-gradient(135deg,{c["paper"]} 85%,{c["accent"]}33 85%);',
+    ]
+    motif=motifs[c['pattern']] if not bg else ''
     rtl = cert.language in ('ps','fa')
     rendered=[]
     for item in c['elements']:
@@ -101,7 +110,7 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
     <style>@page{{size:{paper_size};margin:0}}html,body{{margin:0;padding:0}}
     body{{font-family:'Noto Sans Arabic','Noto Naskh Arabic','DejaVu Sans',sans-serif}}
     .sheet{{box-sizing:border-box;position:relative;width:{width};height:{height};overflow:hidden;
-      background-color:{c['paper']};{frame_styles}{bg_css}}}
+      background-color:{c['paper']};{frame_styles}{motif}{bg_css}}}
     .element{{position:absolute;box-sizing:border-box;line-height:1.36;word-break:normal;overflow-wrap:anywhere;}}
     .element.qr img{{display:block}}.element.logo,.element.signature{{height:14%}}
     .element.qr{{height:20%}}.element.line{{height:1%}}

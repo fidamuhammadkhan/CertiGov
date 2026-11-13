@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from contextlib import asynccontextmanager
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, Depends, Request, Form, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse, Response
@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 from .db import Base, engine, get_db, SessionLocal
 from .models import (Organization, User, Plan, Subscription, CertificateTemplate,
-                     Certificate, AuditEvent, AuthAttempt, VerificationEvent, StoredFile, utcnow)
+                     Certificate, AuditEvent, AuthAttempt, VerificationEvent, StoredFile, WebsiteSettings, WebsiteMessage, utcnow)
 from .security import (SECRET, SIGNING_KEY, password_verify, password_hash, sign_payload,
                        verify_signed, csrf_token, require_roles, require_org, safe_slug, audit, hash_ip)
 from .catalog import CATEGORIES, LABELS, make_design, sanitize_design
@@ -26,17 +26,16 @@ from .rendering import FILES_DIR, CERT_DIR, save_certificate_pdf
 from .assets import safe_upload
 
 ROOT = Path(__file__).resolve().parent
-
 def configured_public_origin():
-    explicit = os.getenv('PUBLIC_BASE_URL', '').strip() or os.getenv('RENDER_EXTERNAL_URL', '').strip()
+    explicit = os.getenv('PUBLIC_BASE_URL','').strip() or os.getenv('RENDER_EXTERNAL_URL','').strip()
     if explicit:
         return explicit.rstrip('/')
-    hostname = os.getenv('VERCEL_PROJECT_PRODUCTION_URL', '').strip() or os.getenv('VERCEL_URL', '').strip()
+    hostname = os.getenv('VERCEL_PROJECT_PRODUCTION_URL','').strip() or os.getenv('VERCEL_URL','').strip()
     if hostname:
-        return 'https://' + hostname.lstrip('/').removeprefix('https://').removeprefix('http://').rstrip('/')
+        return 'https://' + hostname.removeprefix('https://').removeprefix('http://').strip('/')
     return ''
 
-PRODUCTION = os.getenv('PRODUCTION','false').lower() == 'true'
+PRODUCTION = os.getenv('PRODUCTION','false').lower() == 'true' 
 if PRODUCTION and (
     len(SECRET)<40 or len(SIGNING_KEY)<40 or SECRET==SIGNING_KEY
     or SECRET.startswith(('DEV-','REPLACE')) or SIGNING_KEY.startswith(('DEV-','REPLACE'))
@@ -44,6 +43,39 @@ if PRODUCTION and (
     raise RuntimeError('Set unique APP_SECRET and CERT_SIGNING_KEY before production deployment')
 if PRODUCTION and not configured_public_origin().startswith('https://'):
     raise RuntimeError('PUBLIC_BASE_URL must use HTTPS in production')
+
+
+DEFAULT_SITE = {
+    'brand_name':'CertiGov',
+    'tagline':'Design. Issue. Verify.',
+    'hero_title':'Credentials built for trust.',
+    'hero_text':'Create beautiful certificates, invite your team and make authenticity verifiable through a public QR link.',
+    'about_title':'One place for credible certificates.',
+    'about_text':'CertiGov brings organizations, certificate designers, administrators and recipients into a single traceable workflow. Design, issue, verify and revoke credentials from a secure online portal.',
+    'why_text':'Printed documents can be altered or difficult to verify. Every CertiGov certificate has a unique verification address linked to its issuing organization and current registry status.',
+    'mission_text':'Help institutions deliver beautifully designed, verifiable credentials with transparent processes and simple tools.',
+    'contact_email':'', 'phone':'', 'address':'',
+    'facebook':'', 'instagram':'', 'linkedin':'', 'youtube':'', 'x':'', 'whatsapp':'',
+    'primary_color':'#102f49', 'accent_color':'#d6a659', 'background_color':'#f6f8fb',
+    'hero_style':'aurora', 'font_style':'modern', 'logo_text':'CG',
+}
+SITE_TEXT_FIELDS = {'brand_name':60,'tagline':120,'hero_title':130,'hero_text':500,'about_title':150,
+ 'about_text':3000,'why_text':3000,'mission_text':3000,'contact_email':254,'phone':80,
+ 'address':300,'logo_text':3}
+SITE_LINK_FIELDS = ('facebook','instagram','linkedin','youtube','x','whatsapp')
+SITE_PALETTES = ('primary_color','accent_color','background_color')
+
+def website_settings(db):
+    record=db.get(WebsiteSettings,1)
+    return {**DEFAULT_SITE, **(record.values if record and isinstance(record.values,dict) else {})}
+
+def safe_site_url(value):
+    value=(value or '').strip()[:350]
+    if not value:return ''
+    parsed=urlparse(value)
+    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('Social links must be complete HTTPS URLs')
+    return value
 
 
 def initialize_database():
@@ -164,7 +196,8 @@ def render(req, filename, db=None, user=None, status_code=200, **extra):
         user=db.get(User,uid) if uid else None
     context={'request':req,'user':user,'lang':lang,'rtl':lang in ('ps','fa'),
       't':lambda s:translate(s,lang),'languages':LANGUAGES,
-      'categories':CATEGORIES,'flash':req.session.pop('flash',None), 'csrf':csrf_token(req)}
+      'categories':CATEGORIES,'flash':req.session.pop('flash',None), 'csrf':csrf_token(req),
+      'site':website_settings(db) if db is not None else DEFAULT_SITE}
     context.update(extra)
     return templates.TemplateResponse(req,filename,context,status_code=status_code)
 
@@ -272,7 +305,127 @@ async def web_error(req,exc):
 @app.get('/',response_class=HTMLResponse)
 def home(req:Request,db:Session=Depends(get_db),user=Depends(current_user)):
     if user:return go('/admin' if user.role=='superadmin' else '/dashboard')
-    return render(req,'home.html')
+    return render(req,'home.html',db=db,plans=db.query(Plan).filter_by(is_active=True).order_by(Plan.price_usd).all())
+
+
+@app.get('/plans',response_class=HTMLResponse)
+def public_plans(req:Request,db:Session=Depends(get_db),user=Depends(current_user)):
+    plans=db.query(Plan).filter_by(is_active=True).order_by(Plan.price_usd).all()
+    return render(req,'public_plans.html',db=db,user=user,plans=plans)
+
+
+@app.get('/signup',response_class=HTMLResponse)
+def public_signup(req:Request,plan_id:int=0,db:Session=Depends(get_db),user=Depends(current_user)):
+    plans=db.query(Plan).filter_by(is_active=True).order_by(Plan.price_usd).all()
+    selected=db.get(Plan,plan_id) if plan_id else (plans[0] if plans else None)
+    return render(req,'signup.html',db=db,user=user,plans=plans,selected=selected)
+
+
+@app.post('/signup')
+def public_signup_submit(req:Request,plan_id:int=Form(...),organization_name:str=Form(...),
+    category:str=Form('university'),admin_name:str=Form(...),email:str=Form(...),
+    password:str=Form(...),phone:str=Form(''),website:str=Form(''),
+    db:Session=Depends(get_db)):
+    if website.strip():raise HTTPException(400,'Invalid registration')
+    plan=db.get(Plan,plan_id)
+    if not plan or not plan.is_active:raise HTTPException(400,'Selected plan is unavailable')
+    name=organization_name.strip();admin_name=admin_name.strip();email=email.lower().strip()
+    if not 3<=len(name)<=180 or not 2<=len(admin_name)<=160 or category not in CATEGORIES:
+        raise HTTPException(400,'Invalid organization registration details')
+    if len(phone)>80 or len(email)>254 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):
+        raise HTTPException(400,'Enter a valid email address')
+    # Prevent registration bursts from one IP while allowing normal institutional applications.
+    ip=hash_ip(req.client.host if req.client else '')
+    recent=utcnow()-timedelta(hours=1)
+    if db.query(WebsiteMessage).filter_by(ip_hash=ip,subject='New organization registration').filter(WebsiteMessage.created_at>=recent).count()>=3:
+        raise HTTPException(429,'Too many registrations from this network. Try again later.')
+    try:
+        pwd=password_hash(password)
+        slug_root=safe_slug(name)[:65]
+        suffix=secrets.token_hex(4)
+        org=Organization(name=name,slug=f'{slug_root}-{suffix}',code=('REG'+secrets.token_hex(5).upper())[:13],
+            category=category,status='active')
+        db.add(org);db.flush()
+        db.add(User(email=email,full_name=admin_name,password_hash=pwd,role='org_admin',organization_id=org.id))
+        db.add(Subscription(organization_id=org.id,plan_id=plan.id,status='pending',payment_method='manual'))
+        db.add(WebsiteMessage(name=admin_name,email=email,subject='New organization registration',
+            message=f'Organization: {name} | Category: {category} | Plan: {plan.name} | Phone: {phone[:80]}',ip_hash=ip))
+        db.commit()
+    except (ValueError,IntegrityError):
+        db.rollback();flash(req,'Email already registered or password invalid (minimum 12 characters)','error')
+        return go(f'/signup?plan_id={plan_id}')
+    flash(req,'Account created. Subscription request is pending platform approval. You can sign in now.')
+    return go('/login')
+
+
+@app.get('/about',response_class=HTMLResponse)
+def public_about(req:Request,db:Session=Depends(get_db),user=Depends(current_user)):
+    return render(req,'about.html',db=db,user=user)
+
+
+@app.get('/contact',response_class=HTMLResponse)
+def public_contact(req:Request,db:Session=Depends(get_db),user=Depends(current_user)):
+    return render(req,'contact.html',db=db,user=user)
+
+
+@app.post('/contact')
+def public_contact_submit(req:Request,name:str=Form(...),email:str=Form(...),
+    subject:str=Form(...),message:str=Form(...),website:str=Form(''),db:Session=Depends(get_db)):
+    if website.strip():raise HTTPException(400,'Invalid inquiry')
+    name=name.strip();email=email.lower().strip();subject=subject.strip();message=message.strip()
+    if not 2<=len(name)<=120 or not 3<=len(subject)<=160 or not 10<=len(message)<=3000:
+        raise HTTPException(400,'Please complete all fields')
+    if len(email)>254 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):
+        raise HTTPException(400,'Valid email required')
+    ip=hash_ip(req.client.host if req.client else '')
+    if db.query(WebsiteMessage).filter(WebsiteMessage.ip_hash==ip,WebsiteMessage.created_at>=utcnow()-timedelta(hours=1)).count()>=5:
+        raise HTTPException(429,'Message limit reached. Please try later.')
+    db.add(WebsiteMessage(name=name,email=email,subject=subject,message=message,ip_hash=ip))
+    db.commit();flash(req,'Message received. Thank you for contacting CertiGov.')
+    return go('/contact')
+
+
+@app.get('/admin/website')
+def admin_website(req:Request,db:Session=Depends(get_db),user=Depends(need_admin)):
+    return render(req,'admin_website.html',db=db,user=user)
+
+
+@app.post('/admin/website')
+async def admin_website_save(req:Request,db:Session=Depends(get_db),user=Depends(need_admin)):
+    form=await req.form()
+    current=website_settings(db)
+    updated={}
+    for key,maxlen in SITE_TEXT_FIELDS.items():
+        updated[key]=str(form.get(key,'')).strip()[:maxlen]
+    for key in SITE_LINK_FIELDS:
+        try: updated[key]=safe_site_url(str(form.get(key,'')))
+        except ValueError as ex: raise HTTPException(400,str(ex))
+    for key in SITE_PALETTES:
+        value=str(form.get(key,DEFAULT_SITE[key]))
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}',value):raise HTTPException(400,'Invalid website theme color')
+        updated[key]=value
+    updated['hero_style']=str(form.get('hero_style','aurora')) if str(form.get('hero_style','aurora')) in ('aurora','minimal','editorial','midnight') else 'aurora'
+    updated['font_style']=str(form.get('font_style','modern')) if str(form.get('font_style','modern')) in ('modern','classic','rounded') else 'modern'
+    record=db.get(WebsiteSettings,1)
+    if record:record.values={**current,**updated}
+    else:db.add(WebsiteSettings(id=1,values={**current,**updated}))
+    audit(db,req,user,'website.settings.updated','homepage');db.commit()
+    flash(req,'Public website settings published')
+    return go('/admin/website')
+
+
+@app.get('/admin/messages')
+def admin_messages(req:Request,db:Session=Depends(get_db),user=Depends(need_admin)):
+    messages=db.query(WebsiteMessage).order_by(WebsiteMessage.id.desc()).limit(200).all()
+    return render(req,'admin_messages.html',db=db,user=user,messages=messages)
+
+
+@app.post('/admin/messages/{message_id}/status')
+def admin_message_status(req:Request,message_id:int,status:str=Form(...),
+    db:Session=Depends(get_db),user=Depends(need_admin)):
+    record=db.get(WebsiteMessage,message_id)
+    if not record or status not in ('new','reviewed','closed'):raise HTTPException(400,'Invalid message or status')
+    record.status=status;db.commit();return go('/admin/messages')
 
 
 @app.get('/health')
@@ -292,8 +445,8 @@ def change_language(req:Request,lang:str):
 
 
 @app.get('/login')
-def login_page(req:Request):
-    return render(req,'login.html')
+def login_page(req:Request,db:Session=Depends(get_db)):
+    return render(req,'login.html',db=db)
 
 
 @app.post('/login')
@@ -526,6 +679,30 @@ def authorized_asset(filename:str,db:Session=Depends(get_db),user=Depends(need_u
     file=FILES_DIR/filename
     if not file.is_file():raise HTTPException(404,'Image not found')
     return FileResponse(file,media_type='image/png',headers={'Cache-Control':'private, max-age=120'})
+
+
+@app.get('/templates/import')
+def template_import_page(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
+    return render(req,'template_import.html',db=db,user=user)
+
+
+@app.post('/templates/import')
+def template_import_submit(req:Request,name:str=Form(...),orientation:str=Form('landscape'),
+    background:UploadFile=File(...),db:Session=Depends(get_db),user=Depends(need_editor)):
+    if not name.strip() or len(name)>140:raise HTTPException(400,'Template name is required')
+    if not background.filename:raise HTTPException(400,'Choose your own JPG, PNG or PDF template design')
+    org=db.get(Organization,user.organization_id)
+    template=CertificateTemplate(organization_id=org.id,category=org.category,
+       name=name.strip(), config=make_design(org.category, 3,req.session.get('lang','en')),
+       created_by=user.id)
+    template.config={**template.config,'orientation':orientation if orientation in ('portrait','landscape') else 'landscape',
+                     'catalog_index':None,'composition':4,'frame':2}
+    # safe_upload converts uploaded PDF page 1 or a JPG/PNG into a constrained PNG.
+    template.background_path=safe_upload(background,allow_pdf=True,db=db,organization_id=org.id)
+    db.add(template);db.flush()
+    audit(db,req,user,'template.imported',str(template.id))
+    db.commit();flash(req,'Your custom certificate design is ready. Adjust the text and QR positions.')
+    return go(f'/templates/{template.id}/edit')
 
 
 @app.get('/templates/catalog')

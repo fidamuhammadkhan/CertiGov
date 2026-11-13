@@ -148,3 +148,24 @@ class StoredFile(Base):
     media_type = Column(String(60), nullable=False)
     payload = Column(LargeBinary, nullable=False)
     created_at = Column(DateTime, default=utcnow, nullable=False)
+
+
+class WebsiteSettings(Base):
+    """Public marketing content and brand controls, managed by platform superadmins."""
+    __tablename__ = 'website_settings'
+    id = Column(Integer, primary_key=True)
+    values = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class WebsiteMessage(Base):
+    """Customer inquiries; never made publicly accessible."""
+    __tablename__ = 'website_messages'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False)
+    email = Column(String(254), nullable=False)
+    subject = Column(String(160), nullable=False)
+    message = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default='new')
+    ip_hash = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
