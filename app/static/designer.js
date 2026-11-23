@@ -48,7 +48,7 @@ function paint(){canvasStyle();canvas.replaceChildren();const scale=canvas.clien
   resizeHandle.addEventListener('pointermove',ev=>{if(!drag||drag.mode!=='resize'||drag.id!==ev.pointerId||selected!==i)return;const r=canvas.getBoundingClientRect();e.w=clamp(drag.ow+(ev.clientX-drag.x)/r.width*100,e.kind==='qr'?13:2,99-e.x);e.h=clamp(drag.oh+(ev.clientY-drag.y)/r.height*100,e.kind==='qr'?20:2,99-e.y);div.style.width=e.w.toFixed(2)+'%';div.style.height=e.h.toFixed(2)+'%'});
   resizeHandle.addEventListener('pointerup',()=>{drag=null;paint();properties()});resizeHandle.addEventListener('pointercancel',()=>{drag=null});
   div.addEventListener('pointerdown',ev=>{if(ev.button!==0)return;ev.stopPropagation();selected=i;drag={id:ev.pointerId,x:ev.clientX,y:ev.clientY,ox:e.x,oy:e.y,mode:'move'};div.setPointerCapture(ev.pointerId);properties();paintSelected(i);layers()});
-  div.addEventListener('pointermove',ev=>{if(!drag||drag.id!==ev.pointerId||selected!==i)return;const r=canvas.getBoundingClientRect();e.x=clamp(drag.ox+(ev.clientX-drag.x)/r.width*100,0,100-e.w);e.y=clamp(drag.oy+(ev.clientY-drag.y)/r.height*100,0,100-e.h);div.style.left=e.x.toFixed(1)+'%';div.style.top=e.y.toFixed(1)+'%'});
+  div.addEventListener('pointermove',ev=>{if(!drag||drag.mode!=='move'||drag.id!==ev.pointerId||selected!==i)return;const r=canvas.getBoundingClientRect();e.x=clamp(drag.ox+(ev.clientX-drag.x)/r.width*100,0,100-e.w);e.y=clamp(drag.oy+(ev.clientY-drag.y)/r.height*100,0,100-e.h);div.style.left=e.x.toFixed(1)+'%';div.style.top=e.y.toFixed(1)+'%'});
   div.addEventListener('pointerup',()=>{drag=null;properties()});div.addEventListener('pointercancel',()=>drag=null);
   canvas.append(div);
  });layers();
