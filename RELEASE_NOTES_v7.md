@@ -7,7 +7,8 @@
 - Explain exactly how to place fields and use the canvas/resize/layers.
 - Show an empty-state message if all layers are invisible.
 - Reduce unnecessary ResizeObserver paints to stabilize dragging and resizing.
-- Improve new catalog template default positions and align QR element dimensions with sanitized PDF settings.
+- Improve new catalog template default positions: prevent logo/text and QR/description overlaps, and align QR dimensions with sanitized PDF settings.
+- When a preset field is already on the certificate, select its existing layer instead of adding an overlapping duplicate. Place genuinely new custom variables in the least occupied area.
 - Add desktop/mobile and backend regression tests. Existing issued records remain unchanged.
 
 The preview QR is an editor symbol, not a scannable issued certificate. Real QR codes are generated when a credential is issued. Use only fictional data when demonstrating.

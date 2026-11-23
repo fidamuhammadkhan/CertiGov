@@ -42,6 +42,10 @@ with TestClient(app) as client:
    assert 'Diploma in Computing' in pg.locator('#certificate-canvas').inner_text()
    before=pg.locator('#certificate-canvas .canvas-element').count()
    pg.locator('#preset-field').select_option('program');pg.locator('#add-field').click()
+   assert pg.locator('#certificate-canvas .canvas-element').count()==before
+   assert 'already exists' in pg.locator('#designer-status').inner_text()
+   # Add an actual new free-text element; existing presets should not duplicate.
+   pg.locator('#add-text').click()
    assert pg.locator('#certificate-canvas .canvas-element').count()==before+1
    pg.locator('#new-variable-key').fill('student_id');pg.locator('#new-variable-label').fill('Student ID')
    pg.locator('#add-variable').click()

@@ -20,7 +20,25 @@ const labels={en:{recipient:'Student Name',org:'Organization Name',award:'Award 
 const clamp=(v,min,max)=>Math.min(max,Math.max(min,Number(v)||0));
 function remember(){undo.push(JSON.stringify(config));if(undo.length>25)undo.shift()}
 function elem(kind,text='',x=35,y=38,w=35,h=12,size=25){return {id:'element_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),kind,text,x,y,w,h,size,rotate:0,opacity:1,font:'sans',color:config.primary,weight:'normal',align:'center',visible:true}}
-function add(kind,text='',x=35,y=38,w=35,h=12,size=25){remember();config.elements.push(elem(kind,text,x,y,w,h,size));selected=config.elements.length-1;paint();properties()}
+function bestPosition(w=36,h=9){
+ const candidates=[];
+ for(const y of [2,13,26,39,50,61,72,84])for(const x of [61,7,34,45,22]){
+  if(x+w>98||y+h>98)continue;
+  let cost=0;
+  for(const e of config.elements){if(e.visible===false)continue;
+    const overlapX=Math.max(0,Math.min(x+w,e.x+e.w+2)-Math.max(x,e.x-2));
+    const overlapY=Math.max(0,Math.min(y+h,e.y+(e.h||10)+3)-Math.max(y,e.y-3));
+    cost+=overlapX*overlapY*(e.kind==='qr'||e.kind==='logo'?3:1);
+  }
+  candidates.push({x,y,cost});
+ }
+ candidates.sort((a,b)=>a.cost-b.cost);return candidates[0]||{x:30,y:30};
+}
+function add(kind,text='',x=null,y=null,w=35,h=12,size=25){
+ if(x===null||y===null){const pos=bestPosition(w,h);x=pos.x;y=pos.y;}
+ remember();config.elements.push(elem(kind,text,x,y,w,h,size));selected=config.elements.length-1;paint();properties();
+ report('Added '+(kind==='text'?resolved(text):kind)+' — drag the blue outlined box to move it, or use the element properties.');
+}
 function resolved(value){const lang=labels[config.language]||labels.en;return String(value||'').replace(/\{\{([^{}]+)\}\}/g,(m,k)=>{k=k.trim();if(k.startsWith('field:')){const key=k.slice(6);return demoCustom[key]||'['+(config.variables.find(v=>v.key===key)?.label||key)+']';}return demo[k]||lang[k]||labels.en[k]||m})}
 function canvasStyle(){const portrait=config.orientation==='portrait';canvas.classList.toggle('portrait',portrait);canvas.style.backgroundColor=(imageUrl&&config.artwork_mode)?'#ffffff':config.paper;
  const border=['10px double '+config.accent,'11px solid '+config.primary,'6px solid '+config.accent,'12px solid '+config.primary,'10px ridge '+config.accent];
@@ -89,9 +107,14 @@ function properties(){props.replaceChildren();if(selected===null||!config.elemen
 }
 function addButton(id,cb){const target=ctl(id);if(target)target.addEventListener('click',cb)}
 addButton('match-artwork',()=>{if(!imageUrl)return alert('Upload or import artwork first');const image=new Image();image.onload=()=>{remember();config.orientation=image.naturalWidth>=image.naturalHeight?'landscape':'portrait';config.background_fit='contain';config.paper='#ffffff';config.pattern=0;config.artwork_mode=true;paint()};image.onerror=()=>alert('Could not inspect this image. For a PDF background, save and reopen first.');image.src=imageUrl});
-addButton('add-text',()=>add('text','Your text',30,48,40,12,22));
-addButton('add-field',()=>{const choice=ctl('preset-field')?.value||'recipient';add('text','{{'+choice+'}}',27,48,46,12,25)});
-addButton('add-variable',()=>{const normalized=(ctl('new-variable-key')?.value||'').trim().toLowerCase();if(!/^[a-z][a-z0-9_]{0,31}$/.test(normalized))return alert('Enter a valid key such as student_id');if(config.variables.length>=25)return alert('Maximum 25 custom fields');if(config.variables.some(v=>v.key===normalized))return alert('This variable already exists');const label=(ctl('new-variable-label')?.value||normalized).trim();if(!label)return alert('Enter the label shown on issuance form');remember();config.variables.push({key:normalized,label:label.slice(0,70),required:false});add('text','{{field:'+normalized+'}}',25,58,50,10,20);variables();ctl('new-variable-key').value='';ctl('new-variable-label').value=''});
+addButton('add-text',()=>add('text','Your text',null,null,36,10,19));
+addButton('add-field',()=>{
+ const choice=ctl('preset-field')?.value||'recipient',placeholder='{{'+choice+'}}';
+ const existing=config.elements.findIndex(e=>e.kind==='text'&&e.text===placeholder);
+ if(existing>=0){selected=existing;config.elements[selected].visible=true;paint();properties();report('This field already exists on the certificate. It is now selected (blue outline); move or edit it instead of adding a duplicate.');return;}
+ add('text',placeholder,null,null,36,10,19);
+});
+addButton('add-variable',()=>{const normalized=(ctl('new-variable-key')?.value||'').trim().toLowerCase();if(!/^[a-z][a-z0-9_]{0,31}$/.test(normalized))return alert('Enter a valid key such as student_id');if(config.variables.length>=25)return alert('Maximum 25 custom fields');if(config.variables.some(v=>v.key===normalized))return alert('This variable already exists');const label=(ctl('new-variable-label')?.value||normalized).trim();if(!label)return alert('Enter the label shown on issuance form');remember();config.variables.push({key:normalized,label:label.slice(0,70),required:false});add('text','{{field:'+normalized+'}}',null,null,36,9,17);variables();ctl('new-variable-key').value='';ctl('new-variable-label').value=''});
 addButton('add-photo',()=>add('photo','',75,25,16,26,12));
 addButton('add-logo',()=>add('logo','',8,8,14,16,12));
 addButton('add-signature',()=>add('signature','',70,77,18,10,17));

@@ -121,6 +121,12 @@ def make_design(category='university', index=1, language='en'):
     # for the signature and verification QR, avoiding collisions with course text.
     fields['program']['w']=min(fields['program']['w'],52)
     fields['program']['h']=min(10,max(6,93-fields['program']['y']))
+    # Reserve an uncluttered corner for the logo in the centered default layout.
+    if layout==0:
+        fields['logo'].update({'x':5,'y':4,'w':8,'h':12})
+        fields['org'].update({'x':20,'w':70,'align':'left'})
+    # QR pixels must not hide the achievement description in any layout family.
+    fields['description']['w']=min(fields['description']['w'],max(40,83-fields['description']['x']))
     fields['signature'].update({'x':70,'y':84,'w':12,'h':12})
     fields['serial'].update({'x':34,'y':94,'w':31,'h':5,'size':10})
     fields['date'].update({'x':8,'y':93,'w':22,'h':5,'size':11})
