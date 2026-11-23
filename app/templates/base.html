@@ -4,7 +4,7 @@
  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
  <meta name="theme-color" content="#102b42">
  <title>{% block title %}CertiGov{% endblock %} · Certificate Platform</title>
- <link rel="stylesheet" href="{{ url_for('static',path='style.css') }}?v=6">
+ <link rel="stylesheet" href="{{ url_for('static',path='style.css') }}?v=7">
 </head>
 <body class="{% if user %}logged-in{% else %}public{% endif %} font-{{ site.font_style }}" data-lang="{{ lang }}" data-default-theme="{{ site.default_theme }}" data-default-mode="{{ site.default_mode }}" data-theme="{{ site.default_theme }}" data-mode="{{ site.default_mode }}" style="--site-primary:{{ site.primary_color }};--site-accent:{{ site.accent_color }};--site-bg:{{ site.background_color }}">
 <header class="topbar">

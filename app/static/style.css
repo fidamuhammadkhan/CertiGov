@@ -244,3 +244,25 @@ body[data-mode=dark] .designer-layer.selected{background:#143e58;color:#e5f5ff;b
 .designer-toolbar{flex-wrap:wrap;gap:7px}
 .designer-toolbar .btn{margin-inline-start:auto}
 body[data-mode=dark] .designer-help{background:var(--ui-field);color:var(--ui-text)}
+
+
+/* V7: editor loading state, sample-data panel and visible diagnostics */
+.designer-status{padding:12px 14px;border-radius:10px;background:#e8f6f1;color:#235747;border:1px solid #b8decf;font-size:12px;font-weight:750;line-height:1.55}
+.designer-status.error{background:#fff0eb;color:#9e3530;border-color:#f2c7bb}
+.designer-preview-data{border:1px solid var(--ui-border,#dbe4eb);background:var(--ui-soft,#f4f8fb);border-radius:12px;padding:12px 14px}
+.designer-preview-data summary{cursor:pointer;font-size:13px;font-weight:850;color:var(--ui-text,#22435a)}
+.designer-preview-data>.hint{margin:9px 0}
+.designer-preview-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.designer-preview-fields label{font-size:11px;min-width:0}
+.designer-preview-fields input{min-width:0;font-size:12px;min-height:39px;padding:7px 8px}
+.designer-preview-fields label:nth-child(4){grid-column:1/-1}
+.variable-row{display:grid;grid-template-columns:1fr 1fr;gap:9px;align-items:center;margin:8px 0;min-width:0}
+.variable-row span{overflow-wrap:anywhere;min-width:0}
+.variable-row input.variable-example{font-size:11px;min-width:0;padding:7px}
+.variable-row label{flex-direction:row;align-items:center;gap:6px;font-size:11px}
+.variable-row label input[type=checkbox]{width:auto;min-height:0}
+.designer-empty{position:absolute;left:16%;right:16%;top:40%;border:2px dashed #a5bece;border-radius:12px;background:#fffef0;padding:18px;text-align:center;color:#3b5c70;font-size:14px;font-weight:750}
+body[data-mode=dark] .designer-preview-data{background:var(--ui-field,#1a2c40);color:var(--ui-text,#edf3f7)}
+body[data-mode=dark] .designer-status{background:#184c40;border-color:#387260;color:#e9fff5}
+body[data-mode=dark] .designer-status.error{background:#5a2a27;border-color:#945046;color:#fff0ea}
+@media(max-width:500px){.designer-preview-fields{grid-template-columns:1fr}.designer-preview-fields label:nth-child(4){grid-column:auto}}

@@ -29,7 +29,7 @@ LABELS = {
 
 def el(key, text, x, y, w, size, color='#183145', weight='normal', align='center', kind='text'):
     return {'id': key,'kind': kind,'text': text,'x': x,'y': y,'w': w,
-            'size': size,'color': color,'weight':weight,'align':align,'visible':True}
+            'size': size,'h':(20 if kind=='qr' else 14 if kind in ('logo','signature') else 2 if kind=='line' else 10), 'font':'sans', 'rotate':0, 'opacity':1,'color': color,'weight':weight,'align':align,'visible':True}
 
 
 def make_design(category='university', index=1, language='en'):
@@ -44,17 +44,17 @@ def make_design(category='university', index=1, language='en'):
     title = LABELS[category].get(language, LABELS[category]['en'])
     elements = [
       el('logo','{{logo}}',46,4,8,36,kind='logo'),
-      el('org','{{org}}',10,9+yshift,80,25,primary,'bold'),
-      el('line','',17,20+yshift,66,2,accent,kind='line'),
-      el('title','{{certificate_title}}',8,25+yshift,84,40,primary,'bold'),
-      el('subtitle','{{certifies}}',14,42+yshift,72,19,primary),
-      el('recipient','{{recipient}}',12,51+yshift,76,35,primary,'bold'),
-      el('description','{{award}}',15,63+yshift,70,21,primary),
-      el('program','{{program}}',15,72+yshift,70,16,primary),
-      el('date','{{date}}',8,87,20,13,primary,align='left'),
-      el('signature','{{signature}}',43,79,14,22,kind='signature'),
+      el('org','{{org}}',10,15+yshift,80,23,primary,'bold'),
+      el('line','',17,27+yshift,66,2,accent,kind='line'),
+      el('title','{{certificate_title}}',8,32+yshift,84,39,primary,'bold'),
+      el('subtitle','{{certifies}}',14,45+yshift,72,18,primary),
+      el('recipient','{{recipient}}',12,56+yshift,76,32,primary,'bold'),
+      el('description','{{award}}',15,68+yshift,70,18,primary),
+      el('program','{{program}}',15,78+yshift,70,15,primary),
+      el('date','{{date}}',8,91,20,13,primary,align='left'),
+      el('signature','{{signature}}',43,82,14,18,kind='signature'),
       el('serial','{{serial}}',33,92,34,11,primary),
-      el('qr','{{qr}}',84,77,11,20,kind='qr'),
+      el('qr','{{qr}}',84,76,13,20,kind='qr'),
     ]
     if layout in (2,7):
         elements[0]['x'] = 8; elements[1]['y'] = 10; elements[1]['x'] = 20; elements[1]['w'] = 75
@@ -108,6 +108,22 @@ def make_design(category='university', index=1, language='en'):
         pos('logo',45,6,10);pos('org',15,18,70,22);pos('title',9,33,82,49)
         pos('subtitle',20,51,60,17);pos('recipient',13,60,74,44)
         pos('description',18,76,64,18);pos('line',28,29,44)
+    # Keep the core editable text fields from overlapping in new catalog designs.
+    # This intentionally applies only when a new template is created. Older saved
+    # templates and already-issued certificate snapshots remain unchanged.
+    fields={e['id']:e for e in elements}
+    for upper,lower in [('subtitle','recipient'),('recipient','description'),('description','program')]:
+        a,b=fields[upper],fields[lower]
+        a_h=a.get('h',10)
+        if b['y'] < a['y']+a_h+1:
+            b['y']=min(89,a['y']+a_h+1)
+    # Reserve lower-left for date/course, lower-middle for serial and lower-right
+    # for the signature and verification QR, avoiding collisions with course text.
+    fields['program']['w']=min(fields['program']['w'],52)
+    fields['program']['h']=min(10,max(6,93-fields['program']['y']))
+    fields['signature'].update({'x':70,'y':84,'w':12,'h':12})
+    fields['serial'].update({'x':34,'y':94,'w':31,'h':5,'size':10})
+    fields['date'].update({'x':8,'y':93,'w':22,'h':5,'size':11})
     return {'version': 2,'catalog_index': index,'category':category, 'language':language,
        'composition':layout,'pattern':p%5,
        'paper':paper,'primary':primary,'accent':accent,'frame':frame,

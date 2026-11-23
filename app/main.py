@@ -140,7 +140,7 @@ async def validate_csrf(request: Request):
             raise HTTPException(status_code=403,detail='CSRF validation failed. Refresh the page.')
 
 
-app = FastAPI(title='CertiGov — Certificate Issuance and Verification', version='5.0.0', lifespan=lifespan,
+app = FastAPI(title='CertiGov — Certificate Issuance and Verification', version='7.0.0', lifespan=lifespan,
               dependencies=[Depends(validate_csrf)],
               docs_url=None if PRODUCTION else '/api/docs', redoc_url=None)
 app.add_middleware(SessionMiddleware,secret_key=SECRET,session_cookie='certigov_session',
@@ -1084,6 +1084,9 @@ def template_edit(req:Request,template_id:int,db:Session=Depends(get_db),user=De
 def template_save(req:Request,template_id:int,name:str=Form(...),design_json:str=Form(...),
           background:UploadFile|None=File(None),db:Session=Depends(get_db),user=Depends(need_editor)):
     template=assert_tenant(db.get(CertificateTemplate,template_id),user)
+    if not design_json.strip():
+        flash(req,'The certificate designer did not finish loading. Reload the editor and check its status banner before saving.','error')
+        return go(f'/templates/{template_id}/edit')
     try:
         config=sanitize_design(json.loads(design_json))
     except (ValueError,TypeError, json.JSONDecodeError) as exc:

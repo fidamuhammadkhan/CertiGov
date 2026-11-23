@@ -1,15 +1,19 @@
-/* CertiGov v5 — organization-owned interactive certificate design studio.
+/* CertiGov v7 — organization-owned interactive certificate design studio.
    Structural only: no injected HTML, no external network templates, no executable user code. */
 (()=>{'use strict';
 const data=document.getElementById('design-data'), canvas=document.getElementById('certificate-canvas'), props=document.getElementById('element-properties');
-if(!data||!canvas||!props)return;
-let config;try{config=JSON.parse(data.textContent)}catch(e){return}
+const status=document.getElementById('designer-status');
+function report(message, bad=false){if(status){status.textContent=message;status.classList.toggle('error',!!bad)}}
+if(!data||!canvas||!props){report('Designer cannot start: required controls are missing. Reload or contact the administrator.',true);return;}
+let config;try{config=JSON.parse(data.textContent)}catch(e){report('Designer could not read saved template data. No changes were made.',true);return;}
 config.elements=config.elements||[];config.variables=config.variables||[];
 const ctl=id=>document.getElementById(id);
 const paper=ctl('paper'),primary=ctl('primary'),accent=ctl('accent'),orientation=ctl('orientation'),frame=ctl('frame'),pattern=ctl('pattern'),fit=ctl('background-fit');
 const bgInput=document.querySelector('input[name=background]');
 const initialBg=canvas.dataset.background||'';
 const organizationLogo=canvas.dataset.logo||'';
+const demo={recipient:'Sample Student',org:'Example University',program:'Computer Science',award:'Successfully completed the program',date:'2026-11-23'};
+const demoCustom={};
 let imageUrl=initialBg,selected=null,drag=null,undo=[];
 if(config.elements.length){selected=Math.max(0,config.elements.findIndex(e=>e.kind==='qr'))}
 const labels={en:{recipient:'Student Name',org:'Organization Name',award:'Award description',program:'Program or course',date:'2026-11-23',serial:'BAK-2026-00001',valid_until:'—',category:'Certificate category',certificate_title:'Certificate of Achievement',certifies:'This certifies that',signer:'Authorized signature'},ps:{recipient:'د زده کوونکي نوم',org:'د ادارې نوم',award:'د سند موخه',program:'د پروګرام نوم',date:'۱۴۰۵-۰۹-۰۲',serial:'BAK-2026-00001',category:'د سند کټګوري'},fa:{recipient:'نام دانشجو',org:'نام اداره',award:'موضوع سند',program:'نام برنامه',date:'۱۴۰۵-۰۹-۰۲',serial:'BAK-2026-00001',category:'دسته سند'}};
@@ -17,7 +21,7 @@ const clamp=(v,min,max)=>Math.min(max,Math.max(min,Number(v)||0));
 function remember(){undo.push(JSON.stringify(config));if(undo.length>25)undo.shift()}
 function elem(kind,text='',x=35,y=38,w=35,h=12,size=25){return {id:'element_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),kind,text,x,y,w,h,size,rotate:0,opacity:1,font:'sans',color:config.primary,weight:'normal',align:'center',visible:true}}
 function add(kind,text='',x=35,y=38,w=35,h=12,size=25){remember();config.elements.push(elem(kind,text,x,y,w,h,size));selected=config.elements.length-1;paint();properties()}
-function resolved(value){const lang=labels[config.language]||labels.en;return String(value||'').replace(/\{\{([^{}]+)\}\}/g,(m,k)=>{k=k.trim();if(k.startsWith('field:'))return (config.variables.find(v=>v.key===k.slice(6))?.label||k.slice(6))+' (dynamic)';return lang[k]||labels.en[k]||m})}
+function resolved(value){const lang=labels[config.language]||labels.en;return String(value||'').replace(/\{\{([^{}]+)\}\}/g,(m,k)=>{k=k.trim();if(k.startsWith('field:')){const key=k.slice(6);return demoCustom[key]||'['+(config.variables.find(v=>v.key===key)?.label||key)+']';}return demo[k]||lang[k]||labels.en[k]||m})}
 function canvasStyle(){const portrait=config.orientation==='portrait';canvas.classList.toggle('portrait',portrait);canvas.style.backgroundColor=(imageUrl&&config.artwork_mode)?'#ffffff':config.paper;
  const border=['10px double '+config.accent,'11px solid '+config.primary,'6px solid '+config.accent,'12px solid '+config.primary,'10px ridge '+config.accent];
  canvas.style.border=(imageUrl&&config.artwork_mode)?'0':(border[config.frame]||border[0]);
@@ -52,6 +56,10 @@ function paint(){canvasStyle();canvas.replaceChildren();const scale=canvas.clien
   div.addEventListener('pointerup',()=>{drag=null;properties()});div.addEventListener('pointercancel',()=>drag=null);
   canvas.append(div);
  });layers();
+ report('Editor ready · '+config.elements.length+' element(s). Select a field, click Place selected field, then drag it on the preview.');
+ if(!config.elements.some(e=>e.visible!==false)){
+   const empty=document.createElement('div');empty.className='designer-empty';empty.textContent='No visible elements. Add a field or turn on its visibility in the layers panel.';canvas.append(empty);
+ }
 }
 function paintSelected(i){canvas.querySelectorAll('.canvas-element').forEach(el=>el.classList.toggle('active',+el.dataset.index===i))}
 function control(label,value,callback,type='text',options=null){const wrap=document.createElement('label');wrap.textContent=label;let input;
@@ -91,16 +99,24 @@ addButton('add-qr',()=>add('qr','',81,73,14,20,16));
 addButton('add-mask',()=>{remember();config.elements.unshift(elem('mask','',24,42,52,13,13));selected=0;paint();properties()});
 addButton('add-line',()=>add('line','',22,78,56,2,2));
 addButton('undo-design',()=>{if(!undo.length)return;config=JSON.parse(undo.pop());selected=null;paint();properties();variables()});
+document.addEventListener('keydown',ev=>{if((ev.ctrlKey||ev.metaKey)&&ev.key.toLowerCase()==='z' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||'')){ev.preventDefault();ctl('undo-design')?.click()}});
 function variables(){const list=ctl('variable-list');if(!list)return;list.replaceChildren();
  for(const [i,v] of config.variables.entries()){const row=document.createElement('div');row.className='variable-row';const label=document.createElement('span');label.textContent=v.label+' · {{field:'+v.key+'}}';row.append(label);
+ const example=document.createElement('input');example.type='text';example.className='variable-example';example.value=demoCustom[v.key]||'';example.maxLength=100;example.placeholder='Preview value (demo only)';example.setAttribute('aria-label','Sample value for '+v.label);example.addEventListener('input',()=>{demoCustom[v.key]=example.value;paint()});row.append(example);
  const required=document.createElement('label');const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=!!v.required;checkbox.addEventListener('change',()=>{v.required=checkbox.checked});required.append(checkbox,document.createTextNode(' Required'));row.append(required);
  const del=document.createElement('button');del.type='button';del.className='btn btn-sm btn-outline';del.textContent='Remove';del.addEventListener('click',()=>{remember();config.variables.splice(i,1);config.elements=config.elements.filter(e=>e.text!=='{{field:'+v.key+'}}');selected=null;paint();properties();variables()});row.append(del);list.append(row)}
  if(!config.variables.length)list.textContent='No extra variables yet. Use “+ Custom variable” to add Student ID, Grade, Faculty, etc.'}
+for(const key of Object.keys(demo)){
+ const input=ctl('preview-'+key);if(input){demo[key]=input.value;input.addEventListener('input',()=>{demo[key]=input.value;paint()})}
+}
 for(const [id,key,conv] of [['paper','paper',v=>v],['primary','primary',v=>v],['accent','accent',v=>v],['orientation','orientation',v=>v],['frame','frame',Number],['pattern','pattern',Number],['background-fit','background_fit',v=>v]]){
  const el=ctl(id);if(el)el.addEventListener('input',()=>{config[key]=conv(el.value);paint()})}
 const reset=ctl('reset-artwork');if(reset)reset.addEventListener('click',()=>{if(!confirm('Reset to the original uploaded art and QR only? Your template edits will be replaced.'))return;const form=document.createElement('form');form.method='post';form.action=reset.dataset.endpoint;const token=document.createElement('input');token.type='hidden';token.name='csrf';token.value=reset.dataset.csrf;form.append(token);document.body.append(form);form.requestSubmit()});
 if(bgInput)bgInput.addEventListener('change',()=>{const file=bgInput.files[0];if(!file)return;if(imageUrl.startsWith('blob:'))URL.revokeObjectURL(imageUrl);if(file.type.startsWith('image/')){imageUrl=URL.createObjectURL(file)}else{imageUrl='';const m=document.createElement('p');m.className='hint';m.textContent='PDF backgrounds are rendered after saving. Save and reopen for a precise preview.';canvas.parentNode.append(m)}config.artwork_mode=true;paint()});
 const form=ctl('design-form');form.addEventListener('submit',()=>{ctl('design-json').value=JSON.stringify(config)});
-if(window.ResizeObserver)new ResizeObserver(()=>paint()).observe(canvas.parentElement);
-paint();properties();variables();
+if(window.ResizeObserver){let lastWidth=0;new ResizeObserver(()=>{const width=canvas.parentElement?.clientWidth||0;if(Math.abs(width-lastWidth)>2){lastWidth=width;paint()}}).observe(canvas.parentElement)}
+try{paint();properties();variables();
+  const editable=form.dataset.canEdit==='1';
+  for(const id of ['designer-save-main','designer-save-top']){const b=ctl(id);if(b)b.disabled=!editable;}
+ }catch(err){report('The designer could not display this template. Please reload; if it continues, report the template ID to your administrator.',true);console.error('CertiGov designer initialization:',err)}
 })();
