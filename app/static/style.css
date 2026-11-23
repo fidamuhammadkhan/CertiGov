@@ -190,3 +190,57 @@ body[data-mode=dark] .record-card{background:var(--ui-surface);border-color:var(
 body[data-mode=dark] .extra-fields,body[data-mode=dark] .compact-editor,body[data-mode=dark] .record-detail,body[data-mode=dark] .designer-instructions{background:var(--ui-field);color:var(--ui-text)}
 @media(max-width:740px){.row-actions{gap:6px}.filter-grid{grid-template-columns:1fr 1fr}.record-card-head{flex-direction:column;align-items:flex-start}}
 @media(max-width:520px){.filter-grid,.property-grid{grid-template-columns:1fr}.compact-editor{min-width:0}.designer-feature-grid button{flex:1 1 45%}}
+
+
+/* CertiGov v6 — responsive, accessible certificate workspace */
+.designer-layout{grid-template-columns:minmax(315px,365px) minmax(0,1fr);align-items:start}
+.designer-tools{overflow:visible;min-width:0;gap:14px}
+.designer-tools :is(input,select,button){min-width:0;max-width:100%}
+.studio-tools{background:var(--ui-soft,#f5f8fb);padding:14px;border:1px solid var(--ui-border,#dde5ec);border-radius:12px}
+.studio-tools h3{font-size:14px;margin:0 0 5px}
+.designer-buttons.designer-feature-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;align-items:stretch}
+.designer-buttons.designer-feature-grid>button{display:flex;flex:none;min-width:0;max-width:100%;width:100%;min-height:46px;text-align:center;white-space:normal;overflow-wrap:anywhere;word-break:normal;padding:9px 7px;line-height:1.35;font-size:11px;font-weight:800}
+.designer-preset-select,.designer-variable-create{grid-column:1/-1}
+.designer-preset-select{margin:3px 0}
+.designer-feature-grid #add-field{grid-column:1/-1;background:var(--theme-primary);color:white}
+.designer-variable-create{display:grid;grid-template-columns:1fr 1fr;gap:9px;padding:12px;background:var(--ui-surface,#fff);border-radius:11px;border:1px solid var(--ui-border,#dbe4ed)}
+.designer-variable-create label{font-size:11px;min-width:0}
+.designer-variable-create input{font-size:12px;min-height:39px;padding:7px 8px}
+.designer-variable-create>button{grid-column:1/-1;min-height:42px}
+.designer-section{margin-top:12px;padding-top:15px;border-top:1px solid var(--ui-border,#dbe4ec)}
+.designer-layer-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto}
+.designer-layer{display:block;text-align:start;border:1px solid var(--ui-border,#dbe4ec);background:var(--ui-surface,#fff);border-radius:8px;padding:9px 11px;color:var(--ui-text,#203f55);width:100%;font-weight:700;font-size:11px;white-space:normal;overflow-wrap:anywhere}
+.designer-layer.selected{background:#ddf2ff;color:#174364;border:2px solid #3593bd}
+.canvas-element.active{outline:2px solid #1989c9;outline-offset:2px;z-index:10}
+.designer-resize-handle{display:none;position:absolute;right:-7px;bottom:-7px;width:15px;height:15px;border:2px solid white;border-radius:4px;background:#087fae;cursor:nwse-resize;box-shadow:0 0 0 1px #096186;touch-action:none;z-index:4}
+.canvas-element.active .designer-resize-handle{display:block}
+.designer-stage{min-width:0}
+.designer-stage #certificate-canvas-wrap{overflow:auto;background:#dfe5e9;padding:14px}
+.designer-stage #certificate-canvas{min-height:0;background-color:#fff}
+#element-properties{min-width:0;gap:11px}
+#element-properties .property-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+#element-properties .property-grid label{min-width:0;font-size:11px}
+#element-properties .property-grid input{min-width:0;max-width:100%;padding:7px}
+#element-properties>.designer-feature-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+#element-properties>.designer-feature-grid button{white-space:normal;min-height:39px;overflow-wrap:anywhere}
+#certificate-canvas-wrap{isolation:isolate}
+.award-title{display:block;font-weight:750;line-height:1.5;color:var(--ui-text,#253c50);overflow-wrap:anywhere}
+.award-subtitle{display:block;margin-top:4px;color:var(--ui-subtle,#768595);line-height:1.5;overflow-wrap:anywhere}
+.action-menu{position:relative}.action-menu summary{cursor:pointer;list-style:none}.action-menu summary::-webkit-details-marker{display:none}
+.certificate-actions details.action-menu[open]{min-width:220px;flex-basis:auto;z-index:10}
+.action-menu-content{display:flex;flex-direction:column;gap:3px;background:var(--ui-surface,#fff);border:1px solid var(--ui-border,#d9e4eb);border-radius:10px;padding:8px;box-shadow:0 8px 25px #112c401b}
+.action-menu-content :is(a,button){width:100%;display:block;text-align:start;border:0;border-radius:6px;padding:10px 11px;background:none;font-size:12px;font-weight:700;color:var(--ui-text,#344e64);white-space:normal}
+.action-menu-content :is(a,button):hover{background:var(--ui-soft,#eef3f7)}.action-menu-content .disabled-action{opacity:.45;cursor:not-allowed}
+.form-actions-sticky{flex-wrap:wrap}.form-actions-sticky>.btn{min-height:46px}
+body[data-mode=dark] :is(.studio-tools,.designer-variable-create,.designer-layer,.action-menu-content){background:var(--ui-surface);border-color:var(--ui-border);color:var(--ui-text)}
+body[data-mode=dark] .designer-layer.selected{background:#143e58;color:#e5f5ff;border-color:#62c1ed}
+@media(max-width:1320px){.designer-layout{grid-template-columns:minmax(290px,345px) minmax(0,1fr)}}
+@media(max-width:1120px){.designer-layout{grid-template-columns:minmax(0,1fr)}.designer-stage{position:static}.studio-tools{max-width:none}.designer-buttons.designer-feature-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.designer-preset-select,.designer-variable-create{grid-column:1/-1}}
+@media(max-width:620px){.designer-tools{padding:14px}.designer-buttons.designer-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.designer-variable-create{grid-template-columns:1fr}.form-actions-sticky .btn{width:100%}.designer-stage{padding:10px}.designer-stage #certificate-canvas-wrap{padding:6px}}
+
+.designer-help{border:1px solid var(--ui-border,#dae3eb);border-radius:10px;padding:10px 13px;background:var(--ui-soft,#f4f8fb);line-height:1.65}
+.designer-help summary{font-weight:800;color:var(--ui-text,#294860);cursor:pointer}
+.designer-help p{font-size:12px;margin:9px 0 2px}
+.designer-toolbar{flex-wrap:wrap;gap:7px}
+.designer-toolbar .btn{margin-inline-start:auto}
+body[data-mode=dark] .designer-help{background:var(--ui-field);color:var(--ui-text)}

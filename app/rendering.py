@@ -89,6 +89,9 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
     if bg and c['artwork_mode']:
         frame_styles = '' # Full imported art remains unchanged by platform borders.
     motif=motifs[c['pattern']] if not bg else ''
+    # Imported artwork is printed over a neutral paper sheet. Prevent colored
+    # top/bottom bands when a landscape scan is fitted to portrait paper.
+    sheet_paper='#ffffff' if bg and c['artwork_mode'] else c['paper']
     rtl = cert.language in ('ps','fa')
     rendered=[]
     for item in c['elements']:
@@ -128,7 +131,7 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
     <style>@page{{size:{paper_size};margin:0}}html,body{{margin:0;padding:0}}
     body{{font-family:'Noto Sans Arabic','Noto Naskh Arabic','DejaVu Sans',sans-serif}}
     .sheet{{box-sizing:border-box;position:relative;width:{width};height:{height};overflow:hidden;
-      background-color:{c['paper']};{frame_styles}{motif}{bg_css}}}
+      background-color:{sheet_paper};{frame_styles}{motif}{bg_css}}}
     .element{{position:absolute;box-sizing:border-box;line-height:1.36;word-break:normal;overflow-wrap:anywhere;}}
     .element.qr img{{display:block}}.element.logo img,.element.signature img,.element.photo img{{max-width:100%;max-height:100%}}
     .element.qr{{background:#fff;padding:3px}}.element.line{{min-height:2px}}

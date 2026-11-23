@@ -4,7 +4,7 @@
  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
  <meta name="theme-color" content="#102b42">
  <title>{% block title %}CertiGov{% endblock %} · Certificate Platform</title>
- <link rel="stylesheet" href="{{ url_for('static',path='style.css') }}?v=5">
+ <link rel="stylesheet" href="{{ url_for('static',path='style.css') }}?v=6">
 </head>
 <body class="{% if user %}logged-in{% else %}public{% endif %} font-{{ site.font_style }}" data-lang="{{ lang }}" data-default-theme="{{ site.default_theme }}" data-default-mode="{{ site.default_mode }}" data-theme="{{ site.default_theme }}" data-mode="{{ site.default_mode }}" style="--site-primary:{{ site.primary_color }};--site-accent:{{ site.accent_color }};--site-bg:{{ site.background_color }}">
 <header class="topbar">
@@ -42,6 +42,7 @@
    <a href="/dashboard" class="navlink {% if request.url.path=='/dashboard' %}on{% endif %}"><span class="nav-icon">▦</span>{{ t('Dashboard') }}</a>
    <div class="nav-section">{{ t('Certificates') }}</div>
    <a href="/certificates" class="navlink {% if request.url.path=='/certificates' %}on{% endif %}"><span class="nav-icon">▤</span>{{ t('Certificates') }}</a>
+   <a href="/certificates/drafts" class="navlink {% if request.url.path.startswith('/certificates/drafts') %}on{% endif %}"><span class="nav-icon">✎</span>Certificate Drafts</a>
    <a href="/categories" class="navlink {% if request.url.path=='/categories' %}on{% endif %}"><span class="nav-icon">◈</span>Certificate Categories</a>
    {% if user.role in ('org_admin','issuer') %}
    <a href="/certificates/new" class="navlink {% if request.url.path=='/certificates/new' %}on{% endif %}"><span class="nav-icon">＋</span>{{ t('Issue Certificate') }}</a>
@@ -66,6 +67,6 @@
 {% block content %}{% endblock %}
 <footer class="footer"><span>© 2026 {{ site.brand_name }} · {{ site.tagline }}</span><span>{% if not user %}<a href="/about">{{ t("About") }}</a> · <a href="/plans">{{ t("Plans") }}</a> · <a href="/contact">{{ t("Contact") }}</a> · {% endif %} English · پښتو · دری</span></footer>
 </main></div>
-<script src="{{ url_for('static',path='app.js') }}?v=5" defer></script>
+<script src="{{ url_for('static',path='app.js') }}?v=6" defer></script>
 {% block scripts %}{% endblock %}
 </body></html>

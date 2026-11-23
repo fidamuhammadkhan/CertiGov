@@ -1,4 +1,6 @@
 {% extends 'base.html' %}{% block title %}{{ t('Verify certificate') }}{% endblock %}{% block content %}
+{% if replacement %}<div class="banner" style="margin:22px auto;max-width:780px"><strong>Important: This certificate has been replaced by a corrected version.</strong><a class="btn btn-primary" href="/verify/{{ replacement.public_token }}">Verify corrected certificate {{ replacement.serial }}</a></div>{% endif %}
+
 <div class="verification-page"><div class="verify-head"><span class="eyebrow">{{ t("Official Document Check") }}</span><h1>{{ t('Verify certificate') }}</h1><p>{{ t("Live registry verification · This page reflects the current status of the issuer's certificate record.") }}</p></div>
 {% if verify_state=='valid' %}<div class="verify-status is-valid"><span class="verify-icon">✓</span><div><h2>{{ t('Authentic certificate') }}</h2><p>{{ t("Record and cryptographic integrity are verified. Confirm the displayed details match the printed certificate.") }}</p></div></div>
 {% elif verify_state=='revoked' %}<div class="verify-status is-danger"><span class="verify-icon">×</span><div><h2>{{ t('Revoked certificate') }}</h2><p>{{ t("This certificate was revoked by the issuing organization and is no longer valid.") }}</p></div></div>

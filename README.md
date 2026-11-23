@@ -109,3 +109,9 @@ For government deployments, prefer a separated staging environment with real Ara
 ## Version 5 additions (November 2026)
 
 See [RELEASE_NOTES_v5.md](RELEASE_NOTES_v5.md). The platform now provides administrator plan-management actions, organization-specific certificate categories, movable photos and logos in the designer, custom field placeholders, issue-time portrait upload, date/category/search filters, CSV export, and a safer CSRF retry experience. New schema changes are additive; previously issued certificates are preserved. Run `python -m pytest -q && python tests/v5_smoke.py` to exercise the updated workflows.
+
+## CertiGov v6 — Drafts, revisions, archives and improved designer
+
+See [`RELEASE_NOTES_v6.md`](RELEASE_NOTES_v6.md) for schema/behavior changes and
+[`V6_DESIGNER_AND_CERTIFICATE_GUIDE.md`](V6_DESIGNER_AND_CERTIFICATE_GUIDE.md) for the complete user workflow.
+The upgrade uses additive tables; do not modify existing signed certificates directly.

@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 from .db import Base, engine, get_db, SessionLocal
 from .models import (Organization, User, Plan, Subscription, CertificateCategory, CertificateTemplate,
-                     Certificate, AuditEvent, AuthAttempt, VerificationEvent, StoredFile, WebsiteSettings, WebsiteMessage, utcnow)
+                     Certificate, CertificateDraft, CertificateRecordState, AuditEvent, AuthAttempt, VerificationEvent, StoredFile, WebsiteSettings, WebsiteMessage, utcnow)
 from .security import (SECRET, SIGNING_KEY, password_verify, password_hash, sign_payload,
                        verify_signed, csrf_token, require_roles, require_org, safe_slug, audit, hash_ip)
 from .catalog import CATEGORIES, LABELS, make_design, sanitize_design
@@ -354,8 +354,11 @@ def template_custom_values(template, raw):
 
 
 def certificate_filter_query(db, organization_id, q='', category='', date_from='', date_to='',
-                             status='', template='', language=''):
-    query=db.query(Certificate).filter(Certificate.organization_id==organization_id)
+                             status='', template='', language='', archived='no'):
+    query=db.query(Certificate).outerjoin(CertificateRecordState, CertificateRecordState.certificate_id==Certificate.id).filter(Certificate.organization_id==organization_id)
+    if archived not in ('no','yes','all'): raise HTTPException(400,'Invalid archive filter')
+    if archived != 'all':
+        query=query.filter(func.coalesce(CertificateRecordState.is_archived, False)==(archived=='yes'))
     if q:
         term=f'%{q[:100]}%'
         query=query.filter(or_(Certificate.serial.ilike(term),Certificate.recipient_en.ilike(term),
@@ -996,6 +999,7 @@ def template_import_submit(req:Request,name:str=Form(...),orientation:str=Form('
     # catalog's text on it. Start with one movable QR and optionally add fields.
     background_config=template.config.copy()
     background_config.update({'orientation':orientation if orientation in ('portrait','landscape') else 'landscape',
+                     'paper':'#ffffff','primary':'#18344a','accent':'#d4a553','pattern':0,
                      'catalog_index':None,'composition':4,'frame':2,
                      'artwork_mode':True,'background_fit':'contain',
                      'elements':[{'kind':'qr','text':'{{qr}}','x':83,'y':72,'w':13,
@@ -1003,6 +1007,21 @@ def template_import_submit(req:Request,name:str=Form(...),orientation:str=Form('
     template.config=sanitize_design(background_config)
     # safe_upload converts uploaded PDF page 1 or a JPG/PNG into a constrained PNG.
     template.background_path=safe_upload(background,allow_pdf=True,db=db,organization_id=org.id)
+    db.flush()  # Make the normalized image readable for orientation detection.
+    # Preserve the uploaded artwork's natural orientation by default.
+    # Explicit portrait/landscape choice from the user takes precedence.
+    if orientation=='auto':
+        from PIL import Image
+        from .models import StoredFile
+        if os.getenv('STORAGE_BACKEND','filesystem')=='database':
+            original=db.get(StoredFile,template.background_path)
+            img=Image.open(io.BytesIO(original.payload)) if original else None
+        else:
+            img=Image.open(FILES_DIR / template.background_path)
+        if img:
+            cc=dict(template.config)
+            cc['orientation']='landscape' if img.width>=img.height else 'portrait'
+            template.config=sanitize_design(cc)
     db.add(template);db.flush()
     audit(db,req,user,'template.imported',str(template.id))
     db.commit();flash(req,'Your custom certificate design is ready. Adjust the text and QR positions.')
@@ -1046,7 +1065,8 @@ def clean_imported_artwork(req: Request, template_id: int, db:Session=Depends(ge
     config=dict(template.config)
     qr=next((dict(e) for e in config.get('elements',[]) if e.get('kind')=='qr'),None)
     if not qr: qr={'kind':'qr','text':'{{qr}}','x':83,'y':72,'w':13,'size':17,'color':'#122b40','weight':'normal','align':'center','visible':True}
-    config.update({'artwork_mode':True,'background_fit':'contain','elements':[qr]})
+    config.update({'artwork_mode':True,'background_fit':'contain','paper':'#ffffff',
+                   'pattern':0,'elements':[qr]})
     template.config=sanitize_design(config)
     audit(db,req,user,'template.artwork.cleaned',str(template.id))
     db.commit();flash(req,'Artwork reset to QR only. You can now add only the fields you need.')
@@ -1111,25 +1131,161 @@ def template_delete(req:Request,template_id:int,db:Session=Depends(get_db),user=
 
 @app.get('/certificates')
 def certificate_list(req:Request,q:str='',category:str='',date_from:str='',date_to:str='',
-    status:str='',template:str='',language:str='',page:int=1,
+    status:str='',template:str='',language:str='',archived:str='no',page:int=1,
     db:Session=Depends(get_db),user=Depends(need_org)):
-    query=certificate_filter_query(db,user.organization_id,q,category,date_from,date_to,status,template,language)
+    query=certificate_filter_query(db,user.organization_id,q,category,date_from,date_to,status,template,language,archived)
     count=query.count();page=max(1,min(page,10000));page_size=50
     items=query.order_by(Certificate.id.desc()).offset((page-1)*page_size).limit(page_size).all()
     categories=db.query(CertificateCategory).filter_by(organization_id=user.organization_id).order_by(CertificateCategory.name).all()
     templates_list=db.query(CertificateTemplate).filter_by(organization_id=user.organization_id).order_by(CertificateTemplate.name).all()
-    filters=dict(q=q,category=category,date_from=date_from,date_to=date_to,status=status,template=template,language=language)
+    filters=dict(q=q,category=category,date_from=date_from,date_to=date_to,status=status,template=template,language=language,archived=archived)
     return render(req,'certificates.html',db=db,user=user,items=items,q=q,filters=filters,count=count,
-                  page=page,pages=max(1,(count+page_size-1)//page_size),categories_list=categories,templates_list=templates_list)
+                  page=page,pages=max(1,(count+page_size-1)//page_size),categories_list=categories,templates_list=templates_list,
+                  record_states={r.certificate_id:r for r in db.query(CertificateRecordState).filter(CertificateRecordState.certificate_id.in_([i.id for i in items])).all()})
+
+
+# Drafts are editable work-in-progress records. A published certificate is NEVER
+# edited in place: correction creates a new signed certificate and revokes the old.
+DRAFT_COLUMNS=('template_id','recipient_en','recipient_ps','recipient_fa','award','program',
+               'issue_date','valid_until','language','category_id','source_certificate_id')
+
+def can_access_draft(draft,user):
+    assert_tenant(draft,user)
+    if user.role!='org_admin' and draft.creator_id!=user.id:
+        raise HTTPException(403,'Only the draft owner or organization administrator can access this draft')
+    return draft
+
+def draft_form_values(form):
+    values={}
+    for k in DRAFT_COLUMNS:
+        values[k]=str(form.get(k,'')).strip()[:300]
+    for k,v in form.items():
+        if re.fullmatch(r'field__[a-z][a-z0-9_]{0,31}',k):
+            values[k]=str(v).strip()[:300]
+    return values
+
+
+def certificate_form_context(db,user,values=None,draft=None,original=None):
+    org=db.get(Organization,user.organization_id)
+    items=db.query(CertificateTemplate).filter_by(organization_id=org.id,is_active=True).order_by(CertificateTemplate.id.desc()).all()
+    return dict(templates_list=items,categories_list=active_categories(db,org.id),
+        template_options={str(t.id):sanitize_design(t.config).get('variables',[]) for t in items},
+        subscription=active_subscription(db,org.id),today=date.today().isoformat(),
+        values=values or {},draft=draft,source_certificate=original)
+
+@app.get('/certificates/drafts')
+def draft_list(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
+    q=db.query(CertificateDraft).filter_by(organization_id=user.organization_id)
+    if user.role!='org_admin':q=q.filter(CertificateDraft.creator_id==user.id)
+    items=q.order_by(CertificateDraft.updated_at.desc()).limit(250).all()
+    return render(req,'certificate_drafts.html',db=db,user=user,items=items)
+
+@app.post('/certificates/drafts/save')
+async def save_certificate_draft(req:Request,db:Session=Depends(get_db),user=Depends(need_issuer)):
+    form=await req.form()
+    try:
+        draft_id=int(str(form.get('draft_id','0') or '0'))
+        source_id=int(str(form.get('source_certificate_id','0') or '0'))
+        draft=can_access_draft(db.get(CertificateDraft,draft_id),user) if draft_id else None
+        if draft and draft.source_certificate_id!= (source_id or None):
+            raise ValueError('Draft source cannot be changed')
+        tid=int(str(form.get('template_id','0') or '0'))
+        template=assert_tenant(db.get(CertificateTemplate,tid),user) if tid else None
+        if source_id:
+            if user.role!='org_admin':raise HTTPException(403,'Only an organization administrator can correct an issued certificate')
+            source=assert_tenant(db.get(Certificate,source_id),user)
+            if source.status=='revoked':raise ValueError('Revoked certificate cannot be corrected')
+            prev=db.get(CertificateRecordState,source.id)
+            if prev and prev.replacement_certificate_id:raise ValueError('Certificate already replaced')
+        if not draft:
+            draft=CertificateDraft(organization_id=user.organization_id,creator_id=user.id,
+                                   source_certificate_id=source_id or None,form_values={})
+            db.add(draft)
+        draft.template_id=template.id if template else None
+        draft.form_values=draft_form_values(form)
+        upload=form.get('recipient_photo')
+        if upload is not None and getattr(upload,'filename',''):
+            draft.photo_path=safe_upload(upload,allow_pdf=False,db=db,organization_id=user.organization_id)
+        audit(db,req,user,'certificate.draft_saved',str(draft.id),details={'correction':bool(source_id)})
+        db.commit()
+        flash(req,'Draft saved. You can edit it later without issuing a QR certificate.')
+        return go('/certificates/drafts')
+    except (ValueError,HTTPException) as exc:
+        db.rollback();flash(req,str(exc.detail if isinstance(exc,HTTPException) else exc),'error')
+        return go('/certificates/drafts')
+
+@app.get('/certificates/drafts/{draft_id}/edit')
+def edit_certificate_draft(req:Request,draft_id:int,db:Session=Depends(get_db),user=Depends(need_org)):
+    draft=can_access_draft(db.get(CertificateDraft,draft_id),user)
+    source=assert_tenant(db.get(Certificate,draft.source_certificate_id),user) if draft.source_certificate_id else None
+    return render(req,'issue.html',db=db,user=user,**certificate_form_context(db,user,draft.form_values,draft,source))
+
+@app.post('/certificates/drafts/{draft_id}/delete')
+def delete_certificate_draft(req:Request,draft_id:int,db:Session=Depends(get_db),user=Depends(need_issuer)):
+    draft=can_access_draft(db.get(CertificateDraft,draft_id),user)
+    audit(db,req,user,'certificate.draft_deleted',str(draft.id))
+    db.delete(draft);db.commit()
+    flash(req,'Unissued draft deleted')
+    return go('/certificates/drafts')
+
+@app.get('/certificates/{cert_id}/correct')
+def correct_certificate(req:Request,cert_id:int,db:Session=Depends(get_db),user=Depends(need_manager)):
+    cert=assert_tenant(db.get(Certificate,cert_id),user)
+    state=db.get(CertificateRecordState,cert.id)
+    if cert.status=='revoked' or (state and state.replacement_certificate_id) or not integrity_ok(cert):
+        raise HTTPException(409,'Certificate is revoked, replaced or failed integrity verification')
+    values={'template_id':str(cert.template_id),'recipient_en':cert.recipient_en,
+        'recipient_ps':cert.recipient_ps or '', 'recipient_fa':cert.recipient_fa or '',
+        'award':cert.award,'program':cert.program or '', 'issue_date':cert.issue_date.isoformat(),
+        'valid_until':cert.valid_until.isoformat() if cert.valid_until else '',
+        'language':cert.language,'category_id':str(cert.category_id or ''),
+        'source_certificate_id':str(cert.id),
+        **{'field__'+k:v for k,v in (cert.custom or {}).get('values',{}).items()}}
+    return render(req,'issue.html',db=db,user=user,**certificate_form_context(db,user,values,None,cert))
+
+
+@app.post('/certificates/{cert_id}/duplicate')
+def duplicate_certificate_as_draft(req:Request,cert_id:int,db:Session=Depends(get_db),
+                                  user=Depends(need_issuer)):
+    original=assert_tenant(db.get(Certificate,cert_id),user)
+    values={'template_id':str(original.template_id),'recipient_en':original.recipient_en,
+        'recipient_ps':original.recipient_ps or '', 'recipient_fa':original.recipient_fa or '',
+        'award':original.award,'program':original.program or '',
+        'issue_date':date.today().isoformat(),
+        'valid_until':original.valid_until.isoformat() if original.valid_until else '',
+        'language':original.language,'category_id':str(original.category_id or ''),
+        'source_certificate_id':'0',
+        **{'field__'+k:str(v) for k,v in (original.custom or {}).get('values',{}).items()}}
+    draft=CertificateDraft(organization_id=user.organization_id,creator_id=user.id,
+        template_id=original.template_id,form_values=values,
+        photo_path=original.snapshot.get('recipient_photo_path',''))
+    db.add(draft);db.flush()
+    audit(db,req,user,'certificate.duplicated_as_draft',original.serial,details={'draft_id':draft.id})
+    db.commit();flash(req,'New editable draft created. Issuing it will not change the original certificate.')
+    return go(f'/certificates/drafts/{draft.id}/edit')
+
+
+@app.post('/certificates/{cert_id}/archive')
+def archive_certificate(req:Request,cert_id:int,status:str=Form(...),
+    db:Session=Depends(get_db),user=Depends(need_manager)):
+    cert=assert_tenant(db.get(Certificate,cert_id),user)
+    if status not in ('archive','restore'):raise HTTPException(400,'Invalid archive operation')
+    row=db.get(CertificateRecordState,cert.id)
+    if not row:
+        row=CertificateRecordState(certificate_id=cert.id)
+        db.add(row)
+    row.is_archived=status=='archive'
+    row.archived_at=utcnow() if status=='archive' else None
+    row.archived_by_id=user.id if status=='archive' else None
+    audit(db,req,user,'certificate.'+('archived' if row.is_archived else 'restored'),cert.serial)
+    db.commit();flash(req,'Certificate '+('archived' if row.is_archived else 'restored')+'; QR verification remains available')
+    return go('/certificates?archived=yes' if row.is_archived else '/certificates')
 
 
 @app.get('/certificates/new')
 def issue_page(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
-    org=db.get(Organization,user.organization_id)
-    items=db.query(CertificateTemplate).filter_by(organization_id=org.id,is_active=True).order_by(CertificateTemplate.id.desc()).all()
-    return render(req,'issue.html',db=db,user=user,templates_list=items,categories_list=active_categories(db,org.id),
-                  template_options={str(t.id):sanitize_design(t.config).get('variables',[]) for t in items},
-                  subscription=active_subscription(db,org.id),today=date.today().isoformat())
+    return render(req,'issue.html',db=db,user=user,
+                  **certificate_form_context(db,user))
 
 
 @app.post('/certificates/new')
@@ -1137,7 +1293,7 @@ async def issue_certificate(req:Request,template_id:int=Form(...),recipient_en:s
         recipient_ps:str=Form(''),recipient_fa:str=Form(''),award:str=Form(...),
         program:str=Form(''),issue_date:str=Form(...),valid_until:str=Form(''),
         language:str=Form('en'),category_id:int=Form(0),
-        recipient_photo:UploadFile|None=File(None),
+        recipient_photo:UploadFile|None=File(None),draft_id:int=Form(0),source_certificate_id:int=Form(0),
         db:Session=Depends(get_db),user=Depends(need_issuer)):
     org=db.execute(select(Organization).where(Organization.id==user.organization_id).with_for_update()).scalar_one()
     template=assert_tenant(db.get(CertificateTemplate,template_id),user)
@@ -1147,13 +1303,47 @@ async def issue_certificate(req:Request,template_id:int=Form(...),recipient_en:s
         cat=resolve_category(db,org.id,category_id)
         details.update({'category_id':cat.id if cat else None,'category_name':cat.name if cat else '',
                         'custom_values':template_custom_values(template,await req.form())})
+        draft=can_access_draft(db.get(CertificateDraft,draft_id),user) if draft_id else None
+        if draft and source_certificate_id and draft.source_certificate_id!=source_certificate_id:
+            raise ValueError('Correction draft cannot be redirected to another certificate')
+        source_id=draft.source_certificate_id if draft else source_certificate_id
+        original=None
+        if source_id:
+            if user.role!='org_admin':raise HTTPException(403,'Only an organization administrator can correct an issued certificate')
+            original=db.execute(select(Certificate).where(Certificate.id==source_id,
+                Certificate.organization_id==org.id).with_for_update()).scalar_one_or_none()
+            if not original:raise HTTPException(404,'Original certificate not found')
+            prior=db.get(CertificateRecordState,original.id)
+            if original.status=='revoked' or (prior and prior.replacement_certificate_id):
+                raise ValueError('This certificate was already revoked or replaced')
+            if not integrity_ok(original):raise ValueError('Original certificate failed integrity verification')
+            if draft and draft.source_certificate_id!=original.id:
+                raise ValueError('Draft is not linked to this original')
+        if draft and draft.photo_path:
+            details['recipient_photo_path']=draft.photo_path
+        elif original:
+            details['recipient_photo_path']=original.snapshot.get('recipient_photo_path','')
         if recipient_photo and recipient_photo.filename:
             if not any(el.get('kind')=='photo' and el.get('visible') for el in template.config.get('elements',[])):
                 raise ValueError('Add a Student Photo element to the selected template first')
             details['recipient_photo_path']=safe_upload(recipient_photo,allow_pdf=False,db=db,organization_id=org.id)
         cert=make_certificate(db,req,user,org,template,details)
+        if original:
+            original.status='revoked'
+            original.revoked_at=utcnow()
+            original.revoked_reason='Corrected and reissued as '+cert.serial
+            prior=db.get(CertificateRecordState,original.id)
+            if prior is None:
+                prior=CertificateRecordState(certificate_id=original.id)
+                db.add(prior)
+            prior.replacement_certificate_id=cert.id
+            audit(db,req,user,'certificate.corrected_and_reissued',original.serial,
+                  details={'replacement_serial':cert.serial,'replacement_id':cert.id})
+        if draft:
+            audit(db,req,user,'certificate.draft_issued',str(draft.id),details={'serial':cert.serial})
+            db.delete(draft)
         db.commit()
-        flash(req,'Certificate generated and signed')
+        flash(req,'Corrected replacement certificate issued; original revoked' if original else 'Certificate generated and signed')
         return go(f'/certificates/{cert.id}')
     except Exception as exc:
         db.rollback()
@@ -1230,7 +1420,7 @@ def bulk_issue(req:Request,template_id:int=Form(...),category_id:int=Form(0),csv
 
 @app.get('/certificates/export.csv')
 def certificates_export(req:Request,q:str='',category:str='',date_from:str='',date_to:str='',
-    status:str='',template:str='',language:str='',db:Session=Depends(get_db),user=Depends(need_org)):
+    status:str='',template:str='',language:str='',archived:str='no',db:Session=Depends(get_db),user=Depends(need_org)):
     # Spreadsheet formula prefix hardening: opening this export in Excel must not
     # execute text fields accidentally supplied by certificate recipients.
     def cell(v):
@@ -1241,7 +1431,7 @@ def certificates_export(req:Request,q:str='',category:str='',date_from:str='',da
     writer.writerow(['serial','recipient_en','recipient_ps','recipient_fa','award','program',
                      'issue_date','valid_until','language','category','status','verification_url','pdf_sha256'])
     base=public_base_url(req)
-    certs=certificate_filter_query(db,user.organization_id,q,category,date_from,date_to,status,template,language).order_by(Certificate.id.desc()).limit(20000).all()
+    certs=certificate_filter_query(db,user.organization_id,q,category,date_from,date_to,status,template,language,archived).order_by(Certificate.id.desc()).limit(20000).all()
     for cert in certs:
         writer.writerow([cell(cert.serial),cell(cert.recipient_en),cell(cert.recipient_ps),
           cell(cert.recipient_fa),cell(cert.award),cell(cert.program),str(cert.issue_date),
@@ -1259,7 +1449,10 @@ def certificate_detail(req:Request,cert_id:int,db:Session=Depends(get_db),user=D
     base=public_base_url(req)
     verification_url=f'{base}/verify/{cert.public_token}'
     return render(req,'certificate_detail.html',db=db,user=user,cert=cert,
-                  verify_url=verification_url,integrity=integrity_ok(cert),state=verification_state(cert))
+                  verify_url=verification_url,integrity=integrity_ok(cert),state=verification_state(cert),
+                  lifecycle=db.get(CertificateRecordState,cert.id),
+                  replacement=db.get(Certificate,db.get(CertificateRecordState,cert.id).replacement_certificate_id)
+                  if db.get(CertificateRecordState,cert.id) and db.get(CertificateRecordState,cert.id).replacement_certificate_id else None)
 
 
 @app.get('/certificates/{cert_id}/pdf')
@@ -1333,7 +1526,10 @@ def verified_record(db,token,req):
 @app.get('/verify/{token}')
 def public_verify(req:Request,token:str,db:Session=Depends(get_db)):
     cert,state=verified_record(db,token,req)
-    return render(req,'verify.html',db=db,cert=cert,verify_state=state,org=cert.organization if cert else None)
+    row=db.get(CertificateRecordState,cert.id) if cert else None
+    replacement=db.get(Certificate,row.replacement_certificate_id) if row and row.replacement_certificate_id else None
+    return render(req,'verify.html',db=db,cert=cert,verify_state=state,org=cert.organization if cert else None,
+                  replacement=replacement)
 
 
 @app.get('/api/verify/{token}')

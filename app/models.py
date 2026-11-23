@@ -126,6 +126,32 @@ class Certificate(Base):
     certificate_category = relationship('CertificateCategory')
 
 
+class CertificateDraft(Base):
+    """Editable pre-issuance record; it has no serial, signature or public QR token."""
+    __tablename__ = 'certificate_drafts'
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False, index=True)
+    template_id = Column(Integer, ForeignKey('certificate_templates.id'), nullable=True)
+    source_certificate_id = Column(Integer, ForeignKey('certificates.id'), nullable=True)
+    creator_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    form_values = Column(JSON, nullable=False, default=dict)
+    photo_path = Column(String(240), default='')
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    template = relationship('CertificateTemplate')
+
+
+class CertificateRecordState(Base):
+    """Mutable workflow metadata kept outside immutable signed certificate claims."""
+    __tablename__ = 'certificate_record_states'
+    certificate_id = Column(Integer, ForeignKey('certificates.id'), primary_key=True)
+    is_archived = Column(Boolean, nullable=False, default=False)
+    archived_at = Column(DateTime, nullable=True)
+    archived_by_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    replacement_certificate_id = Column(Integer, ForeignKey('certificates.id'), nullable=True)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class AuditEvent(Base):
     __tablename__ = 'audit_events'
     id = Column(Integer, primary_key=True)

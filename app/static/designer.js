@@ -11,13 +11,14 @@ const bgInput=document.querySelector('input[name=background]');
 const initialBg=canvas.dataset.background||'';
 const organizationLogo=canvas.dataset.logo||'';
 let imageUrl=initialBg,selected=null,drag=null,undo=[];
+if(config.elements.length){selected=Math.max(0,config.elements.findIndex(e=>e.kind==='qr'))}
 const labels={en:{recipient:'Student Name',org:'Organization Name',award:'Award description',program:'Program or course',date:'2026-11-23',serial:'BAK-2026-00001',valid_until:'—',category:'Certificate category',certificate_title:'Certificate of Achievement',certifies:'This certifies that',signer:'Authorized signature'},ps:{recipient:'د زده کوونکي نوم',org:'د ادارې نوم',award:'د سند موخه',program:'د پروګرام نوم',date:'۱۴۰۵-۰۹-۰۲',serial:'BAK-2026-00001',category:'د سند کټګوري'},fa:{recipient:'نام دانشجو',org:'نام اداره',award:'موضوع سند',program:'نام برنامه',date:'۱۴۰۵-۰۹-۰۲',serial:'BAK-2026-00001',category:'دسته سند'}};
 const clamp=(v,min,max)=>Math.min(max,Math.max(min,Number(v)||0));
 function remember(){undo.push(JSON.stringify(config));if(undo.length>25)undo.shift()}
 function elem(kind,text='',x=35,y=38,w=35,h=12,size=25){return {id:'element_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),kind,text,x,y,w,h,size,rotate:0,opacity:1,font:'sans',color:config.primary,weight:'normal',align:'center',visible:true}}
 function add(kind,text='',x=35,y=38,w=35,h=12,size=25){remember();config.elements.push(elem(kind,text,x,y,w,h,size));selected=config.elements.length-1;paint();properties()}
 function resolved(value){const lang=labels[config.language]||labels.en;return String(value||'').replace(/\{\{([^{}]+)\}\}/g,(m,k)=>{k=k.trim();if(k.startsWith('field:'))return (config.variables.find(v=>v.key===k.slice(6))?.label||k.slice(6))+' (dynamic)';return lang[k]||labels.en[k]||m})}
-function canvasStyle(){const portrait=config.orientation==='portrait';canvas.classList.toggle('portrait',portrait);canvas.style.backgroundColor=config.paper;
+function canvasStyle(){const portrait=config.orientation==='portrait';canvas.classList.toggle('portrait',portrait);canvas.style.backgroundColor=(imageUrl&&config.artwork_mode)?'#ffffff':config.paper;
  const border=['10px double '+config.accent,'11px solid '+config.primary,'6px solid '+config.accent,'12px solid '+config.primary,'10px ridge '+config.accent];
  canvas.style.border=(imageUrl&&config.artwork_mode)?'0':(border[config.frame]||border[0]);
  canvas.style.backgroundPosition='center';canvas.style.backgroundRepeat='no-repeat';canvas.style.backgroundSize=({contain:'contain',cover:'cover',stretch:'100% 100%'})[config.background_fit||'contain'];
@@ -25,6 +26,12 @@ function canvasStyle(){const portrait=config.orientation==='portrait';canvas.cla
  canvas.style.backgroundImage=imageUrl?`url("${imageUrl}")`:motifs[config.pattern||0];
  paper.value=config.paper;primary.value=config.primary;accent.value=config.accent;orientation.value=config.orientation;frame.value=String(config.frame);pattern.value=String(config.pattern||0);fit.value=config.background_fit||'contain';
 }
+function layers(){const list=ctl('layer-list');if(!list)return;list.replaceChildren();
+ [...config.elements.keys()].reverse().forEach(i=>{const e=config.elements[i];const b=document.createElement('button');b.type='button';b.className='designer-layer'+(selected===i?' selected':'');
+ let name=e.kind==='text'?(resolved(e.text).slice(0,45)||'Text'):({photo:'Student portrait',qr:'Verification QR',logo:'Organization logo',signature:'Signature',mask:'Cover box',line:'Line'}[e.kind]||e.kind);
+ b.textContent=(i+1)+'. '+name+(e.visible===false?' (hidden)':'');b.addEventListener('click',()=>{selected=i;paint();properties();document.getElementById('element-properties')?.scrollIntoView({behavior:'smooth',block:'nearest'})});
+ list.append(b)})}
+
 function paint(){canvasStyle();canvas.replaceChildren();const scale=canvas.clientWidth/(config.orientation==='portrait'?794:1122);
  config.elements.forEach((e,i)=>{
   if(e.visible===false)return;
@@ -36,12 +43,17 @@ function paint(){canvasStyle();canvas.replaceChildren();const scale=canvas.clien
   else if(e.kind==='logo'||e.kind==='signature'){if(e.kind==='logo'&&organizationLogo){const image=document.createElement('img');image.src=organizationLogo;image.alt='Organization logo';div.append(image)}else div.textContent=e.kind==='logo'?'Institution Logo':'Authorized signature'}
   else if(e.kind==='photo'){div.textContent='STUDENT PHOTO (uploaded during issuance)'}
   else{div.textContent=resolved(e.text)}
-  div.addEventListener('pointerdown',ev=>{if(ev.button!==0)return;ev.stopPropagation();selected=i;drag={id:ev.pointerId,x:ev.clientX,y:ev.clientY,ox:e.x,oy:e.y};div.setPointerCapture(ev.pointerId);properties();canvas.querySelectorAll('.canvas-element').forEach(el=>el.classList.toggle('active',+el.dataset.index===i))});
+  const resizeHandle=document.createElement('span');resizeHandle.className='designer-resize-handle';resizeHandle.title='Drag to resize';resizeHandle.setAttribute('aria-hidden','true');div.append(resizeHandle);
+  resizeHandle.addEventListener('pointerdown',ev=>{if(ev.button!==0)return;ev.stopPropagation();selected=i;drag={id:ev.pointerId,x:ev.clientX,y:ev.clientY,ow:e.w,oh:e.h,mode:'resize'};resizeHandle.setPointerCapture(ev.pointerId);paintSelected(i);properties()});
+  resizeHandle.addEventListener('pointermove',ev=>{if(!drag||drag.mode!=='resize'||drag.id!==ev.pointerId||selected!==i)return;const r=canvas.getBoundingClientRect();e.w=clamp(drag.ow+(ev.clientX-drag.x)/r.width*100,e.kind==='qr'?13:2,99-e.x);e.h=clamp(drag.oh+(ev.clientY-drag.y)/r.height*100,e.kind==='qr'?20:2,99-e.y);div.style.width=e.w.toFixed(2)+'%';div.style.height=e.h.toFixed(2)+'%'});
+  resizeHandle.addEventListener('pointerup',()=>{drag=null;paint();properties()});resizeHandle.addEventListener('pointercancel',()=>{drag=null});
+  div.addEventListener('pointerdown',ev=>{if(ev.button!==0)return;ev.stopPropagation();selected=i;drag={id:ev.pointerId,x:ev.clientX,y:ev.clientY,ox:e.x,oy:e.y,mode:'move'};div.setPointerCapture(ev.pointerId);properties();paintSelected(i);layers()});
   div.addEventListener('pointermove',ev=>{if(!drag||drag.id!==ev.pointerId||selected!==i)return;const r=canvas.getBoundingClientRect();e.x=clamp(drag.ox+(ev.clientX-drag.x)/r.width*100,0,100-e.w);e.y=clamp(drag.oy+(ev.clientY-drag.y)/r.height*100,0,100-e.h);div.style.left=e.x.toFixed(1)+'%';div.style.top=e.y.toFixed(1)+'%'});
   div.addEventListener('pointerup',()=>{drag=null;properties()});div.addEventListener('pointercancel',()=>drag=null);
   canvas.append(div);
- });
+ });layers();
 }
+function paintSelected(i){canvas.querySelectorAll('.canvas-element').forEach(el=>el.classList.toggle('active',+el.dataset.index===i))}
 function control(label,value,callback,type='text',options=null){const wrap=document.createElement('label');wrap.textContent=label;let input;
  if(options){input=document.createElement('select');for(const [value,label] of options){const option=document.createElement('option');option.value=value;option.textContent=label;input.append(option)}}
  else{input=document.createElement('input');input.type=type;if(type==='number')input.step='0.5'}input.value=value;
@@ -62,15 +74,16 @@ function properties(){props.replaceChildren();if(selected===null||!config.elemen
  const visible=document.createElement('label');const chk=document.createElement('input');chk.type='checkbox';chk.checked=e.visible!==false;chk.addEventListener('change',()=>{e.visible=chk.checked;paint()});visible.append(chk,document.createTextNode(' Visible'));props.append(visible);
  const actions=document.createElement('div');actions.className='designer-feature-grid';
  const button=(label,fn,cls='btn btn-sm btn-outline')=>{const b=document.createElement('button');b.type='button';b.className=cls;b.textContent=label;b.addEventListener('click',fn);actions.append(b)};
- button('Duplicate',()=>{remember();const clone=JSON.parse(JSON.stringify(e));clone.x=clamp(clone.x+3,0,90);clone.y=clamp(clone.y+3,0,90);config.elements.push(clone);selected=config.elements.length-1;paint();properties()});
+ button('Duplicate',()=>{remember();const clone=JSON.parse(JSON.stringify(e));clone.id='element_'+Date.now();clone.x=clamp(clone.x+3,0,90);clone.y=clamp(clone.y+3,0,90);config.elements.push(clone);selected=config.elements.length-1;paint();properties()});
  button('Bring forward',()=>{if(selected>=config.elements.length-1)return;remember();[config.elements[selected],config.elements[selected+1]]=[config.elements[selected+1],config.elements[selected]];selected++;paint();properties()});
  button('Send backward',()=>{if(selected<1)return;remember();[config.elements[selected],config.elements[selected-1]]=[config.elements[selected-1],config.elements[selected]];selected--;paint();properties()});
  button('Delete element',()=>{if(config.elements.length<=1)return alert('Keep at least one design element');remember();config.elements.splice(selected,1);selected=null;paint();properties()},'btn btn-sm btn-danger');props.append(actions);
 }
 function addButton(id,cb){const target=ctl(id);if(target)target.addEventListener('click',cb)}
+addButton('match-artwork',()=>{if(!imageUrl)return alert('Upload or import artwork first');const image=new Image();image.onload=()=>{remember();config.orientation=image.naturalWidth>=image.naturalHeight?'landscape':'portrait';config.background_fit='contain';config.paper='#ffffff';config.pattern=0;config.artwork_mode=true;paint()};image.onerror=()=>alert('Could not inspect this image. For a PDF background, save and reopen first.');image.src=imageUrl});
 addButton('add-text',()=>add('text','Your text',30,48,40,12,22));
-addButton('add-field',()=>{const keys=['recipient','org','certificate_title','certifies','award','program','date','serial','valid_until','signer','category'];const choice=prompt('Select dynamic field:\n'+keys.join(', '),'recipient');if(!choice)return;if(!keys.includes(choice.trim()))return alert('Use one of the listed field names');add('text','{{'+choice.trim()+'}}',27,48,46,12,25)});
-addButton('add-variable',()=>{const key=prompt('Create variable code (lowercase letters, digits, underscore). Example: student_id','student_id');if(!key)return;const normalized=key.trim().toLowerCase();if(!/^[a-z][a-z0-9_]{0,31}$/.test(normalized))return alert('Invalid code. Use student_id format');if(config.variables.some(v=>v.key===normalized))return alert('Already exists; use the variable list');const label=prompt('Label shown on the issue form','Student ID')||normalized;remember();config.variables.push({key:normalized,label:label.slice(0,70),required:false});add('text','{{field:'+normalized+'}}',25,58,50,10,20);variables()});
+addButton('add-field',()=>{const choice=ctl('preset-field')?.value||'recipient';add('text','{{'+choice+'}}',27,48,46,12,25)});
+addButton('add-variable',()=>{const normalized=(ctl('new-variable-key')?.value||'').trim().toLowerCase();if(!/^[a-z][a-z0-9_]{0,31}$/.test(normalized))return alert('Enter a valid key such as student_id');if(config.variables.length>=25)return alert('Maximum 25 custom fields');if(config.variables.some(v=>v.key===normalized))return alert('This variable already exists');const label=(ctl('new-variable-label')?.value||normalized).trim();if(!label)return alert('Enter the label shown on issuance form');remember();config.variables.push({key:normalized,label:label.slice(0,70),required:false});add('text','{{field:'+normalized+'}}',25,58,50,10,20);variables();ctl('new-variable-key').value='';ctl('new-variable-label').value=''});
 addButton('add-photo',()=>add('photo','',75,25,16,26,12));
 addButton('add-logo',()=>add('logo','',8,8,14,16,12));
 addButton('add-signature',()=>add('signature','',70,77,18,10,17));
