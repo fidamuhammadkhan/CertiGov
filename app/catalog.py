@@ -1,5 +1,6 @@
 """500 deterministic customizable templates per sector: 10 palettes × 10 layouts × 5 frame treatments."""
 from copy import deepcopy
+import re, math
 
 CATEGORIES = {
     'university': 'University', 'school': 'School', 'government': 'Government',
@@ -116,7 +117,7 @@ def make_design(category='university', index=1, language='en'):
 def sanitize_design(obj):
     """Accept only structural, bounded editor JSON; no HTML/CSS/URLs from users."""
     if not isinstance(obj, dict): raise ValueError('Invalid design JSON')
-    allowed_kind = {'text','qr','logo','signature','line','mask'}
+    allowed_kind = {'text','qr','logo','signature','line','mask','photo'}
     out = {k: obj.get(k) for k in ('version','catalog_index','category','language')}
     for prop in ('paper','primary','accent'):
         value = obj.get(prop, '#ffffff')
@@ -129,18 +130,36 @@ def sanitize_design(obj):
     out['orientation'] = obj.get('orientation') if obj.get('orientation') in ('portrait','landscape') else 'landscape'
     out['artwork_mode'] = bool(obj.get('artwork_mode',False))
     out['background_fit'] = obj.get('background_fit') if obj.get('background_fit') in ('contain','cover','stretch') else 'contain'
+    variables = obj.get('variables', [])
+    if not isinstance(variables,list) or len(variables)>25: raise ValueError('Maximum 25 custom variables per template')
+    out['variables'] = []
+    seen = set()
+    for v in variables:
+        if not isinstance(v,dict): raise ValueError('Invalid custom field')
+        key = str(v.get('key','')).strip().lower()
+        if not re.fullmatch(r'[a-z][a-z0-9_]{0,31}',key) or key in seen:
+            raise ValueError('Variable names must be unique, e.g. student_id')
+        seen.add(key)
+        label = str(v.get('label','')).strip()[:70]
+        if not label: raise ValueError('A custom field needs a display label')
+        out['variables'].append({'key':key,'label':label,'required':bool(v.get('required',False))})
     arr = obj.get('elements', [])
     if not isinstance(arr,list) or len(arr)>45: raise ValueError('Too many fields')
     out['elements'] = []
     for i,e in enumerate(arr):
         if not isinstance(e,dict) or e.get('kind') not in allowed_kind: continue
         def num(name, maximum, default):
-            try: return max(0, min(maximum, float(e.get(name,default))))
-            except (ValueError,TypeError): return default
+            try:
+                v=float(e.get(name,default))
+                return max(0, min(maximum, v)) if math.isfinite(v) else default
+            except (ValueError,TypeError,OverflowError): return default
         out['elements'].append({'id': f'field_{i}', 'kind':e['kind'],
           'text':str(e.get('text',''))[:400], 'x':min(87,num('x',99,5)) if e['kind']=='qr' else num('x',99,5),
           'y':num('y',99,5),'w':max(13 if e['kind']=='qr' else 2,num('w',100,30)),
-          'size':max(7,num('size',90,18)), 'h':max(2,num('h',70,10)),
+          'size':max(7,num('size',90,18)), 'h':max(20 if e['kind']=='qr' else 2,num('h',70,20 if e['kind']=='qr' else 10)),
+          'rotate':max(-180,min(180,float(e.get('rotate',0)))) if str(e.get('rotate',0)).replace('.','',1).lstrip('-').isdigit() else 0,
+          'opacity':max(0.1,min(1.0,num('opacity',1,1))),
+          'font':e.get('font','sans') if e.get('font') in ('sans','serif','mono','arabic') else 'sans',
           'color':e['color'] if isinstance(e.get('color'),str) and len(e['color'])==7 and e['color'].startswith('#') and all(c in '0123456789abcdefABCDEF' for c in e['color'][1:]) else out['primary'],
           'weight':'bold' if e.get('weight')=='bold' else 'normal',
           'align':e.get('align') if e.get('align') in ('left','right','center') else 'center',

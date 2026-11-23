@@ -105,3 +105,7 @@ python -m pytest -q
 ```
 
 For government deployments, prefer a separated staging environment with real Arabic script fonts and exact target browsers/printers. `APP_SECRET` and `CERT_SIGNING_KEY` must remain stable and protected between deployments: changing the signing key will cause existing certificates to fail integrity validation.
+
+## Version 5 additions (November 2026)
+
+See [RELEASE_NOTES_v5.md](RELEASE_NOTES_v5.md). The platform now provides administrator plan-management actions, organization-specific certificate categories, movable photos and logos in the designer, custom field placeholders, issue-time portrait upload, date/category/search filters, CSV export, and a safer CSRF retry experience. New schema changes are additive; previously issued certificates are preserved. Run `python -m pytest -q && python tests/v5_smoke.py` to exercise the updated workflows.

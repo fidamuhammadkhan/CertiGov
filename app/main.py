@@ -9,14 +9,14 @@ from fastapi import FastAPI, Depends, Request, Form, File, UploadFile, HTTPExcep
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy import func, select, or_
+from sqlalchemy import func, select, or_, inspect, text as sql_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from jinja2 import Environment
 from fastapi.templating import Jinja2Templates
 
 from .db import Base, engine, get_db, SessionLocal
-from .models import (Organization, User, Plan, Subscription, CertificateTemplate,
+from .models import (Organization, User, Plan, Subscription, CertificateCategory, CertificateTemplate,
                      Certificate, AuditEvent, AuthAttempt, VerificationEvent, StoredFile, WebsiteSettings, WebsiteMessage, utcnow)
 from .security import (SECRET, SIGNING_KEY, password_verify, password_hash, sign_payload,
                        verify_signed, csrf_token, require_roles, require_org, safe_slug, audit, hash_ip)
@@ -96,7 +96,15 @@ def safe_site_url(value):
 
 
 def initialize_database():
+    # CREATE ALL never adds columns to existing production tables. Apply one
+    # idempotent, additive migration for the v5 category relationship.
     Base.metadata.create_all(bind=engine)
+    columns = {col['name'] for col in inspect(engine).get_columns('certificates')}
+    if 'category_id' not in columns:
+        with engine.begin() as conn:
+            conn.execute(sql_text('ALTER TABLE certificates ADD COLUMN category_id INTEGER REFERENCES certificate_categories(id)'))
+    with engine.begin() as conn:
+        conn.execute(sql_text('CREATE INDEX IF NOT EXISTS ix_certificates_category_id ON certificates (category_id)'))
     with SessionLocal() as db:
         if db.query(Plan).count() == 0:
             db.add_all([
@@ -132,7 +140,7 @@ async def validate_csrf(request: Request):
             raise HTTPException(status_code=403,detail='CSRF validation failed. Refresh the page.')
 
 
-app = FastAPI(title='CertiGov — Certificate Issuance and Verification', version='4.0.0', lifespan=lifespan,
+app = FastAPI(title='CertiGov — Certificate Issuance and Verification', version='5.0.0', lifespan=lifespan,
               dependencies=[Depends(validate_csrf)],
               docs_url=None if PRODUCTION else '/api/docs', redoc_url=None)
 app.add_middleware(SessionMiddleware,secret_key=SECRET,session_cookie='certigov_session',
@@ -148,7 +156,7 @@ async def safety_middleware(request, call_next):
     response.headers['Referrer-Policy']='strict-origin-when-cross-origin'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Permissions-Policy']='camera=(), microphone=(), geolocation=()'
-    response.headers['Content-Security-Policy']=("default-src 'self'; img-src 'self' data:; "
+    response.headers['Content-Security-Policy']=("default-src 'self'; img-src 'self' data: blob:; "
        "style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; "
        "base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
     if request.url.path.startswith(('/verify/','/api/verify/')):
@@ -243,12 +251,15 @@ def require_issuing_capacity(db,org):
 
 
 def payload_for(cert):
-    return {'organization_id':cert.organization_id,'template_id':cert.template_id,
+    data = {'organization_id':cert.organization_id,'template_id':cert.template_id,
       'serial':cert.serial, 'public_token':cert.public_token, 'recipient_en':cert.recipient_en,
       'recipient_ps':cert.recipient_ps or '', 'recipient_fa':cert.recipient_fa or '',
       'award':cert.award,'program':cert.program or '', 'issue_date':str(cert.issue_date),
       'valid_until':str(cert.valid_until) if cert.valid_until else '',
       'language':cert.language,'custom':cert.custom or {}, 'snapshot':cert.snapshot}
+    if cert.category_id is not None:
+        data['category_id']=cert.category_id
+    return data
 
 
 def integrity_ok(cert):
@@ -277,6 +288,8 @@ def make_certificate(db,request,user,org,template,data):
     sub.issued_count+=1
     token=secrets.token_urlsafe(24)
     snapshot={'config':sanitize_design(template.config),'background_path':template.background_path or '',
+              'recipient_photo_path':data.get('recipient_photo_path',''),
+              'category_name':data.get('category_name',''),
               'logo_path':org.logo_path or '', 'signature_path':org.signature_path or '',
               'organization_name':org.name,'organization_name_ps':org.name_ps or '',
               'organization_name_fa':org.name_fa or ''}
@@ -286,7 +299,9 @@ def make_certificate(db,request,user,org,template,data):
       award=data['award'].strip(),program=data.get('program','').strip(),
       issue_date=data['issue_date'],valid_until=data.get('valid_until'),
       language=data.get('language','en'), issuer_id=user.id,
-      custom={},snapshot=snapshot,signed_payload='',signature='')
+      category_id=data.get('category_id') or None,
+      custom={'values':data.get('custom_values',{})} if data.get('custom_values') else {},
+      snapshot=snapshot,signed_payload='',signature='')
     cert.signed_payload,cert.signature=sign_payload(payload_for(cert))
     db.add(cert)
     db.flush()
@@ -311,8 +326,85 @@ def parse_fields(recipient_en,recipient_ps,recipient_fa,award,program,issue_date
                 award=award,program=program,issue_date=issue,valid_until=expires,language=language)
 
 
+def active_categories(db, organization_id):
+    return (db.query(CertificateCategory).filter_by(organization_id=organization_id,is_active=True)
+            .order_by(CertificateCategory.name).all())
+
+
+def resolve_category(db, organization_id, category_id, required_when_available=True):
+    categories = active_categories(db, organization_id)
+    if not category_id:
+        if categories and required_when_available:
+            raise ValueError('Select a certificate category before issuing')
+        return None
+    category = db.get(CertificateCategory, int(category_id))
+    if not category or category.organization_id!=organization_id or not category.is_active:
+        raise ValueError('Certificate category is unavailable for your organization')
+    return category
+
+
+def template_custom_values(template, raw):
+    result={}
+    for item in sanitize_design(template.config).get('variables',[]):
+        value=str(raw.get('field__'+item['key'],'')).strip()
+        if item['required'] and not value: raise ValueError(item['label']+' is required')
+        if len(value)>300:raise ValueError(item['label']+' is too long')
+        result[item['key']]=value
+    return result
+
+
+def certificate_filter_query(db, organization_id, q='', category='', date_from='', date_to='',
+                             status='', template='', language=''):
+    query=db.query(Certificate).filter(Certificate.organization_id==organization_id)
+    if q:
+        term=f'%{q[:100]}%'
+        query=query.filter(or_(Certificate.serial.ilike(term),Certificate.recipient_en.ilike(term),
+          Certificate.recipient_ps.ilike(term),Certificate.recipient_fa.ilike(term),
+          Certificate.award.ilike(term),Certificate.program.ilike(term)))
+    if category:
+        if category=='uncategorized':query=query.filter(Certificate.category_id.is_(None))
+        else:
+            try: catid=int(category)
+            except (ValueError,TypeError): raise HTTPException(400,'Invalid category filter')
+            cat=db.get(CertificateCategory,catid)
+            if not cat or cat.organization_id!=organization_id: raise HTTPException(400,'Invalid category filter')
+            query=query.filter(Certificate.category_id==catid)
+    if template:
+        try: tid=int(template)
+        except (ValueError,TypeError):raise HTTPException(400,'Invalid template filter')
+        tmpl=db.get(CertificateTemplate,tid)
+        if not tmpl or tmpl.organization_id!=organization_id:raise HTTPException(400,'Invalid template filter')
+        query=query.filter(Certificate.template_id==tid)
+    if status in ('valid','revoked'):
+        query=query.filter(Certificate.status==status)
+    elif status=='expired':
+        query=query.filter(Certificate.status=='valid',Certificate.valid_until<date.today())
+    if language in ('en','ps','fa'):
+        query=query.filter(Certificate.language==language)
+    for value,side in ((date_from,'from'),(date_to,'to')):
+        if value:
+            try: d=date.fromisoformat(value)
+            except ValueError:raise HTTPException(400,'Invalid '+side+' date')
+            query=query.filter(Certificate.issue_date>=d if side=='from' else Certificate.issue_date<=d)
+    if date_from and date_to and date_from>date_to:raise HTTPException(400,'Start date exceeds end date')
+    return query
+
+
 @app.exception_handler(HTTPException)
 async def web_error(req,exc):
+    if exc.status_code==403 and str(exc.detail).startswith('CSRF validation failed') and not req.url.path.startswith('/api/'):
+        # A request with no CSRF token still receives HTTP 403. Stale tokens
+        # from long-open tabs can instead be retried from a fresh GET page.
+        form=await req.form()
+        if not (req.headers.get('x-csrf-token') or form.get('csrf')):
+            return render(req,'error.html',status_code=403,error=exc.detail,code=403)
+        # The original POST remains rejected. Avoid a confusing dead-end error
+        # page after a stale tab; never replay the action without a valid token.
+        flash(req,'The form session was refreshed. Please submit the action again.','error')
+        from urllib.parse import urlparse
+        referer=urlparse(req.headers.get('referer',''))
+        target=referer.path if referer.path.startswith('/') and not referer.path.startswith('//') else '/login'
+        return go(target)
     if exc.status_code==401 and not req.url.path.startswith('/api/'):
         return go('/login')
     if req.url.path.startswith('/api/'):
@@ -448,6 +540,12 @@ def admin_message_status(req:Request,message_id:int,status:str=Form(...),
     record.status=status;db.commit();return go('/admin/messages')
 
 
+@app.get('/api/session/csrf')
+def refresh_session_csrf(req:Request):
+    token=csrf_token(req)
+    return JSONResponse({'csrf':token},headers={'Cache-Control':'no-store, private'})
+
+
 @app.get('/health')
 def health():
     return {'status':'ok','service':'certigov'}
@@ -506,6 +604,14 @@ def admin_dashboard(req:Request,db:Session=Depends(get_db),user=Depends(need_adm
     return render(req,'admin_dashboard.html',db=db,user=user,stats=data,events=events)
 
 
+@app.post('/admin/messages/{message_id}/delete')
+def admin_message_delete(req:Request,message_id:int,db:Session=Depends(get_db),user=Depends(need_admin)):
+    item=db.get(WebsiteMessage,message_id)
+    if not item:raise HTTPException(404,'Message not found')
+    audit(db,req,user,'website.message.deleted',str(item.id),details={'subject':item.subject})
+    db.delete(item);db.commit();flash(req,'Message deleted')
+    return go('/admin/messages')
+
 @app.get('/admin/organizations')
 def admin_organizations(req:Request,db:Session=Depends(get_db),user=Depends(need_admin)):
     items=db.query(Organization).order_by(Organization.id.desc()).all()
@@ -537,6 +643,30 @@ def admin_organizations_add(req:Request,name:str=Form(...),name_ps:str=Form(''),
         db.rollback()
         flash(req,'Unable to create organization: duplicate email/code/slug or invalid input','error')
         return go('/admin/organizations')
+
+
+@app.post('/admin/organizations/{org_id}/edit')
+def admin_organization_edit(req:Request,org_id:int,name:str=Form(...),name_ps:str=Form(''),
+    name_fa:str=Form(''),category:str=Form('university'),db:Session=Depends(get_db),user=Depends(need_admin)):
+    org=db.get(Organization,org_id)
+    if not org:raise HTTPException(404,'Organization not found')
+    if len(name.strip())<2 or category not in CATEGORIES:raise HTTPException(400,'Invalid organization name or type')
+    org.name=name.strip()[:180];org.name_ps=name_ps[:180];org.name_fa=name_fa[:180];org.category=category
+    audit(db,req,user,'organization.updated',str(org_id));db.commit();flash(req,'Organization details updated')
+    return go('/admin/organizations')
+
+@app.post('/admin/organizations/{org_id}/delete')
+def admin_organization_delete(req:Request,org_id:int,db:Session=Depends(get_db),user=Depends(need_admin)):
+    org=db.get(Organization,org_id)
+    if not org:raise HTTPException(404,'Organization not found')
+    # Organization records are an audit boundary. Retain them, their users,
+    # issued certificates and verification URLs even when service closes.
+    org.status='suspended'
+    for account in db.query(User).filter_by(organization_id=org_id).all():
+        account.is_active=False
+    audit(db,req,user,'organization.archived',str(org.id))
+    db.commit();flash(req,'Organization archived; accounts disabled and certificate history retained.')
+    return go('/admin/organizations')
 
 
 @app.post('/admin/organizations/{org_id}/status')
@@ -572,6 +702,61 @@ def plan_create(req:Request,name:str=Form(...),price_usd:str=Form(...),duration_
     return go('/admin/plans')
 
 
+def parse_plan_fields(name,price_usd,duration_days,max_certificates):
+    name=name.strip()[:90]
+    try:
+        price=Decimal(price_usd)
+        cap=int(max_certificates) if max_certificates.strip() else None
+    except (ValueError,InvalidOperation):raise ValueError('Invalid plan price or maximum certificates')
+    if not name or not price.is_finite() or price<0 or price>100000 or duration_days<1 or duration_days>3650 or (cap is not None and not (1<=cap<=100000000)):
+        raise ValueError('Enter valid plan name, price, duration and quota')
+    return dict(name=name,price_usd=price,duration_days=duration_days,max_certificates=cap)
+
+
+@app.post('/admin/plans/{plan_id}/edit')
+def plan_edit(req:Request,plan_id:int,name:str=Form(...),price_usd:str=Form(...),
+    duration_days:int=Form(...),max_certificates:str=Form(''),db:Session=Depends(get_db),user=Depends(need_admin)):
+    plan=db.get(Plan,plan_id)
+    if not plan:raise HTTPException(404,'Plan does not exist')
+    try:
+        changes=parse_plan_fields(name,price_usd,duration_days,max_certificates)
+        # Existing issued subscriptions retain their expiry; a changed quota
+        # may change their future usage. Forbid that unintended entitlement change.
+        live=db.query(Subscription).filter(Subscription.plan_id==plan_id,Subscription.status=='active').count()
+        if live and changes['max_certificates']!=plan.max_certificates:
+            raise ValueError('This plan has active subscribers. Create a new plan to change its certificate quota.')
+        for key,value in changes.items():setattr(plan,key,value)
+        audit(db,req,user,'plan.updated',str(plan_id))
+        db.commit();flash(req,'Plan updated successfully')
+    except (ValueError,IntegrityError) as ex:
+        db.rollback();flash(req,str(ex) if isinstance(ex,ValueError) else 'Duplicate plan name','error')
+    return go('/admin/plans')
+
+
+@app.post('/admin/plans/{plan_id}/status')
+def plan_status(req:Request,plan_id:int,status:str=Form(...),db:Session=Depends(get_db),user=Depends(need_admin)):
+    plan=db.get(Plan,plan_id)
+    if not plan:raise HTTPException(404,'Plan does not exist')
+    if status not in ('active','archived'):raise HTTPException(400,'Invalid plan status')
+    plan.is_active=status=='active'
+    audit(db,req,user,'plan.'+status,str(plan.id));db.commit()
+    flash(req,'Plan '+('restored' if plan.is_active else 'archived')+'. Existing subscriptions remain in history.')
+    return go('/admin/plans')
+
+
+@app.post('/admin/plans/{plan_id}/delete')
+def plan_delete(req:Request,plan_id:int,db:Session=Depends(get_db),user=Depends(need_admin)):
+    plan=db.get(Plan,plan_id)
+    if not plan:raise HTTPException(404,'Plan does not exist')
+    if db.query(Subscription).filter_by(plan_id=plan.id).count():
+        plan.is_active=False
+        audit(db,req,user,'plan.archived',str(plan.id));db.commit()
+        flash(req,'Plan has subscription history, so it was safely archived instead of deleted.')
+    else:
+        audit(db,req,user,'plan.deleted',str(plan.id),details={'name':plan.name})
+        db.delete(plan);db.commit();flash(req,'Unused plan deleted')
+    return go('/admin/plans')
+
 @app.get('/admin/subscriptions')
 def subscription_requests(req:Request,db:Session=Depends(get_db),user=Depends(need_admin)):
     items=db.query(Subscription).order_by(Subscription.id.desc()).limit(150).all()
@@ -582,7 +767,12 @@ def subscription_requests(req:Request,db:Session=Depends(get_db),user=Depends(ne
 def review_subscription(req:Request,sub_id:int,decision:str=Form(...),
                         db:Session=Depends(get_db),user=Depends(need_admin)):
     sub=db.execute(select(Subscription).where(Subscription.id==sub_id).with_for_update()).scalar_one_or_none()
-    if not sub or sub.status!='pending':raise HTTPException(400,'Only pending requests can be reviewed')
+    if not sub:
+        flash(req,'Subscription request no longer exists.','error')
+        return go('/admin/subscriptions')
+    if sub.status!='pending':
+        flash(req,'This request was already processed. No duplicate change was made.','error')
+        return go('/admin/subscriptions')
     if decision not in ('approve','reject'):raise HTTPException(400,'Invalid decision')
     if decision=='approve':
         # Only one active subscription per organization.
@@ -597,6 +787,17 @@ def review_subscription(req:Request,sub_id:int,decision:str=Form(...),
     db.commit();flash(req,'Subscription '+decision+'d')
     return go('/admin/subscriptions')
 
+
+@app.post('/admin/subscriptions/{sub_id}/status')
+def subscription_status(req:Request,sub_id:int,status:str=Form(...),db:Session=Depends(get_db),user=Depends(need_admin)):
+    record=db.get(Subscription,sub_id)
+    if not record:raise HTTPException(404,'Subscription not found')
+    if status!='cancelled' or record.status not in ('active','pending'):
+        raise HTTPException(400,'Only active or pending subscriptions can be cancelled')
+    record.status='cancelled'
+    audit(db,req,user,'subscription.cancelled',str(sub_id),organization_id=record.organization_id)
+    db.commit();flash(req,'Subscription cancelled; historical record retained')
+    return go('/admin/subscriptions')
 
 @app.get('/dashboard')
 def dashboard(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
@@ -654,6 +855,17 @@ def team_create(req:Request,email:str=Form(...),full_name:str=Form(...),
     return go('/team')
 
 
+@app.post('/team/{member_id}/delete')
+def org_user_delete(req:Request,member_id:int,db:Session=Depends(get_db),user=Depends(need_manager)):
+    member=db.get(User,member_id)
+    if not member or member.organization_id!=user.organization_id:raise HTTPException(404,'Member not found')
+    if member.id==user.id:raise HTTPException(400,'Cannot disable your own account')
+    member.is_active=False
+    audit(db,req,user,'team.archived',str(member.id))
+    db.commit();flash(req,'Team account disabled; issuance history retained')
+    return go('/team')
+
+
 @app.post('/team/{member_id}/status')
 def team_status(req:Request,member_id:int,status:str=Form(...),db:Session=Depends(get_db),user=Depends(need_manager)):
     member=db.get(User,member_id)
@@ -700,6 +912,71 @@ def authorized_asset(filename:str,db:Session=Depends(get_db),user=Depends(need_u
     if not file.is_file():raise HTTPException(404,'Image not found')
     return FileResponse(file,media_type='image/png',headers={'Cache-Control':'private, max-age=120'})
 
+
+@app.get('/categories')
+def category_page(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
+    categories=(db.query(CertificateCategory).filter_by(organization_id=user.organization_id)
+                .order_by(CertificateCategory.name).all())
+    counts={c.id:db.query(Certificate).filter_by(organization_id=user.organization_id,category_id=c.id).count() for c in categories}
+    return render(req,'categories_manage.html',db=db,user=user,items=categories,counts=counts)
+
+
+def normalize_category_slug(name):
+    value=re.sub(r'[^a-z0-9]+','-',name.strip().lower()).strip('-')
+    if not value or len(value)>60:raise ValueError('Category code must contain English letters or digits')
+    return value
+
+
+@app.post('/categories')
+def category_create(req:Request,name:str=Form(...),slug:str=Form(''),description:str=Form(''),
+    db:Session=Depends(get_db),user=Depends(need_manager)):
+    try:
+        name=name.strip()[:120]
+        if len(name)<2:raise ValueError('Category name must contain at least two characters')
+        code=normalize_category_slug(slug or name)
+        item=CertificateCategory(organization_id=user.organization_id,name=name,slug=code,description=description.strip()[:320])
+        db.add(item);db.flush();audit(db,req,user,'category.created',str(item.id),details={'name':name})
+        db.commit();flash(req,'Certificate category created')
+    except (ValueError,IntegrityError) as ex:
+        db.rollback();flash(req,'Duplicate category code or invalid name','error')
+    return go('/categories')
+
+
+@app.post('/categories/{category_id}/edit')
+def category_edit(req:Request,category_id:int,name:str=Form(...),description:str=Form(''),
+    db:Session=Depends(get_db),user=Depends(need_manager)):
+    item=db.get(CertificateCategory,category_id)
+    if not item or item.organization_id!=user.organization_id:raise HTTPException(404,'Category not found')
+    if len(name.strip())<2:raise HTTPException(400,'Invalid category name')
+    item.name=name.strip()[:120];item.description=description.strip()[:320]
+    audit(db,req,user,'category.updated',str(item.id));db.commit();flash(req,'Category updated')
+    return go('/categories')
+
+
+@app.post('/categories/{category_id}/status')
+def category_status(req:Request,category_id:int,status:str=Form(...),db:Session=Depends(get_db),user=Depends(need_manager)):
+    item=db.get(CertificateCategory,category_id)
+    if not item or item.organization_id!=user.organization_id:raise HTTPException(404,'Category not found')
+    if status not in ('active','archived'):raise HTTPException(400,'Invalid category status')
+    item.is_active=status=='active'
+    audit(db,req,user,'category.status',str(item.id),details={'status':status})
+    db.commit();flash(req,'Certificate category '+status)
+    return go('/categories')
+
+
+@app.post('/categories/{category_id}/delete')
+def category_delete(req:Request,category_id:int,db:Session=Depends(get_db),user=Depends(need_manager)):
+    item=db.get(CertificateCategory,category_id)
+    if not item or item.organization_id!=user.organization_id:raise HTTPException(404,'Category not found')
+    count=db.query(Certificate).filter_by(organization_id=user.organization_id,category_id=item.id).count()
+    if count:
+        item.is_active=False
+        audit(db,req,user,'category.archived',str(item.id));db.commit()
+        flash(req,'Category is used by issued certificates and was archived to preserve history.')
+    else:
+        audit(db,req,user,'category.deleted',str(item.id),details={'name':item.name})
+        db.delete(item);db.commit();flash(req,'Unused category deleted')
+    return go('/categories')
 
 @app.get('/templates/import')
 def template_import_page(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
@@ -779,7 +1056,8 @@ def clean_imported_artwork(req: Request, template_id: int, db:Session=Depends(ge
 @app.get('/templates/{template_id}/edit')
 def template_edit(req:Request,template_id:int,db:Session=Depends(get_db),user=Depends(need_org)):
     template=assert_tenant(db.get(CertificateTemplate,template_id),user)
-    return render(req,'designer.html',db=db,user=user,template=template,config=template.config)
+    return render(req,'designer.html',db=db,user=user,template=template,config=template.config,
+                  org=db.get(Organization,user.organization_id))
 
 
 @app.post('/templates/{template_id}/edit')
@@ -810,62 +1088,97 @@ def duplicate_template(req:Request,template_id:int,db:Session=Depends(get_db),us
     flash(req,'Template duplicated');return go(f'/templates/{new.id}/edit')
 
 
+@app.post('/templates/{template_id}/status')
+def template_status(req:Request,template_id:int,status:str=Form(...),db:Session=Depends(get_db),user=Depends(need_editor)):
+    template=assert_tenant(db.get(CertificateTemplate,template_id),user)
+    if status not in ('active','archived'):raise HTTPException(400,'Invalid template status')
+    template.is_active=status=='active'
+    audit(db,req,user,'template.status',str(template.id),details={'status':status})
+    db.commit();flash(req,'Template '+status);return go('/templates')
+
+
+@app.post('/templates/{template_id}/delete')
+def template_delete(req:Request,template_id:int,db:Session=Depends(get_db),user=Depends(need_editor)):
+    template=assert_tenant(db.get(CertificateTemplate,template_id),user)
+    if db.query(Certificate).filter_by(organization_id=user.organization_id,template_id=template.id).count():
+        template.is_active=False
+        audit(db,req,user,'template.archived',str(template.id));db.commit()
+        flash(req,'Template has issued certificates; it was archived instead of deleted.')
+    else:
+        audit(db,req,user,'template.deleted',str(template.id),details={'name':template.name})
+        db.delete(template);db.commit();flash(req,'Unused template deleted')
+    return go('/templates')
+
 @app.get('/certificates')
-def certificate_list(req:Request,q:str='',db:Session=Depends(get_db),user=Depends(need_org)):
-    query=db.query(Certificate).filter_by(organization_id=user.organization_id)
-    if q:
-        term=f'%{q[:100]}%'
-        query=query.filter(or_(Certificate.serial.ilike(term),Certificate.recipient_en.ilike(term),
-          Certificate.recipient_ps.ilike(term),Certificate.recipient_fa.ilike(term)))
-    items=query.order_by(Certificate.id.desc()).limit(300).all()
-    return render(req,'certificates.html',db=db,user=user,items=items,q=q)
+def certificate_list(req:Request,q:str='',category:str='',date_from:str='',date_to:str='',
+    status:str='',template:str='',language:str='',page:int=1,
+    db:Session=Depends(get_db),user=Depends(need_org)):
+    query=certificate_filter_query(db,user.organization_id,q,category,date_from,date_to,status,template,language)
+    count=query.count();page=max(1,min(page,10000));page_size=50
+    items=query.order_by(Certificate.id.desc()).offset((page-1)*page_size).limit(page_size).all()
+    categories=db.query(CertificateCategory).filter_by(organization_id=user.organization_id).order_by(CertificateCategory.name).all()
+    templates_list=db.query(CertificateTemplate).filter_by(organization_id=user.organization_id).order_by(CertificateTemplate.name).all()
+    filters=dict(q=q,category=category,date_from=date_from,date_to=date_to,status=status,template=template,language=language)
+    return render(req,'certificates.html',db=db,user=user,items=items,q=q,filters=filters,count=count,
+                  page=page,pages=max(1,(count+page_size-1)//page_size),categories_list=categories,templates_list=templates_list)
 
 
 @app.get('/certificates/new')
 def issue_page(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
     org=db.get(Organization,user.organization_id)
     items=db.query(CertificateTemplate).filter_by(organization_id=org.id,is_active=True).order_by(CertificateTemplate.id.desc()).all()
-    return render(req,'issue.html',db=db,user=user,templates_list=items,subscription=active_subscription(db,org.id),today=date.today().isoformat())
+    return render(req,'issue.html',db=db,user=user,templates_list=items,categories_list=active_categories(db,org.id),
+                  template_options={str(t.id):sanitize_design(t.config).get('variables',[]) for t in items},
+                  subscription=active_subscription(db,org.id),today=date.today().isoformat())
 
 
 @app.post('/certificates/new')
-def issue_certificate(req:Request,template_id:int=Form(...),recipient_en:str=Form(...),
+async def issue_certificate(req:Request,template_id:int=Form(...),recipient_en:str=Form(...),
         recipient_ps:str=Form(''),recipient_fa:str=Form(''),award:str=Form(...),
         program:str=Form(''),issue_date:str=Form(...),valid_until:str=Form(''),
-        language:str=Form('en'),db:Session=Depends(get_db),user=Depends(need_issuer)):
+        language:str=Form('en'),category_id:int=Form(0),
+        recipient_photo:UploadFile|None=File(None),
+        db:Session=Depends(get_db),user=Depends(need_issuer)):
     org=db.execute(select(Organization).where(Organization.id==user.organization_id).with_for_update()).scalar_one()
     template=assert_tenant(db.get(CertificateTemplate,template_id),user)
     if not template.is_active:raise HTTPException(400,'Template not active')
     try:
         details=parse_fields(recipient_en,recipient_ps,recipient_fa,award,program,issue_date,valid_until,language)
+        cat=resolve_category(db,org.id,category_id)
+        details.update({'category_id':cat.id if cat else None,'category_name':cat.name if cat else '',
+                        'custom_values':template_custom_values(template,await req.form())})
+        if recipient_photo and recipient_photo.filename:
+            if not any(el.get('kind')=='photo' and el.get('visible') for el in template.config.get('elements',[])):
+                raise ValueError('Add a Student Photo element to the selected template first')
+            details['recipient_photo_path']=safe_upload(recipient_photo,allow_pdf=False,db=db,organization_id=org.id)
         cert=make_certificate(db,req,user,org,template,details)
         db.commit()
         flash(req,'Certificate generated and signed')
         return go(f'/certificates/{cert.id}')
     except Exception as exc:
         db.rollback()
-        # Avoid information disclosure for unforeseen rendering failures.
-        if isinstance(exc,ValueError): flash(req,str(exc),'error')
-        else: flash(req,'Could not generate document; check the design, fonts and subscription','error')
+        if isinstance(exc,ValueError):flash(req,str(exc),'error')
+        elif isinstance(exc,HTTPException):flash(req,str(exc.detail),'error')
+        else:flash(req,'Could not generate document; check the design, fonts and subscription','error')
         return go('/certificates/new')
 
 
 @app.get('/certificates/bulk')
 def bulk_page(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
     items=db.query(CertificateTemplate).filter_by(organization_id=user.organization_id,is_active=True).all()
-    return render(req,'bulk.html',db=db,user=user,items=items)
+    return render(req,'bulk.html',db=db,user=user,items=items,categories_list=active_categories(db,user.organization_id))
 
 
 @app.get('/certificates/sample.csv')
 def bulk_sample(user=Depends(need_org)):
-    csvfile='recipient_en,recipient_ps,recipient_fa,award,program,issue_date,valid_until,language\n'+(
-       'Ahmad Safi,احمد صافی,احمد صافی,Completion of Python Course,Computer Science,2026-11-12,,en\n')
+    csvfile='recipient_en,recipient_ps,recipient_fa,award,program,issue_date,valid_until,language,category\n'+(
+       'Ahmad Safi,احمد صافی,احمد صافی,Completion of Python Course,Computer Science,2026-11-12,,en,\n')
     return Response('\ufeff'+csvfile,media_type='text/csv; charset=utf-8',
         headers={'Content-Disposition':'attachment; filename="certificate_sample.csv"'})
 
 
 @app.post('/certificates/bulk')
-def bulk_issue(req:Request,template_id:int=Form(...),csv_file:UploadFile=File(...),
+def bulk_issue(req:Request,template_id:int=Form(...),category_id:int=Form(0),csv_file:UploadFile=File(...),
           db:Session=Depends(get_db),user=Depends(need_issuer)):
     if not (csv_file.filename or '').lower().endswith('.csv'):
         flash(req,'Choose a .csv file','error');return go('/certificates/bulk')
@@ -877,7 +1190,7 @@ def bulk_issue(req:Request,template_id:int=Form(...),csv_file:UploadFile=File(..
         required={'recipient_en','award','issue_date'}
         if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
             raise ValueError('Missing columns: '+', '.join(required))
-        parsed=[]
+        parsed=[];rows_for_categories=[]
         for rowno,row in enumerate(reader,start=2):
             if len(parsed)>=100:raise ValueError('Maximum 100 certificates per CSV. Split larger batches.')
             if None in row:raise ValueError(f'Row {rowno}: invalid number of columns')
@@ -885,10 +1198,20 @@ def bulk_issue(req:Request,template_id:int=Form(...),csv_file:UploadFile=File(..
                 parsed.append(parse_fields(row.get('recipient_en') or '',row.get('recipient_ps') or '',
                     row.get('recipient_fa') or '',row.get('award') or '',row.get('program') or '',
                     row.get('issue_date') or '',row.get('valid_until') or '',row.get('language') or 'en'))
+                rows_for_categories.append(row)
             except ValueError as ex:raise ValueError(f'Row {rowno}: {ex}') from ex
         if not parsed:raise ValueError('CSV has no records')
         org=db.execute(select(Organization).where(Organization.id==user.organization_id).with_for_update()).scalar_one()
         template=assert_tenant(db.get(CertificateTemplate,template_id),user)
+        cat=resolve_category(db,org.id,category_id,required_when_available=not all(row.get('category') for row in rows_for_categories))
+        categories=active_categories(db,org.id)
+        cat_by_slug={c.slug:c for c in categories}
+        for data,raw in zip(parsed,rows_for_categories):
+            chosen=cat_by_slug.get((raw.get('category') or '').strip().lower()) if raw.get('category') else cat
+            if raw.get('category') and not chosen: raise ValueError('Unknown category code: '+str(raw.get('category'))[:60])
+            data['category_id']=chosen.id if chosen else None
+            data['category_name']=chosen.name if chosen else ''
+            data['custom_values']=template_custom_values(template,raw)
         sub=require_issuing_capacity(db,org)
         if sub.plan.max_certificates is not None and sub.issued_count+len(parsed)>sub.plan.max_certificates:
             raise ValueError('CSV exceeds remaining certificate allowance')
@@ -906,7 +1229,8 @@ def bulk_issue(req:Request,template_id:int=Form(...),csv_file:UploadFile=File(..
 
 
 @app.get('/certificates/export.csv')
-def certificates_export(req:Request,db:Session=Depends(get_db),user=Depends(need_org)):
+def certificates_export(req:Request,q:str='',category:str='',date_from:str='',date_to:str='',
+    status:str='',template:str='',language:str='',db:Session=Depends(get_db),user=Depends(need_org)):
     # Spreadsheet formula prefix hardening: opening this export in Excel must not
     # execute text fields accidentally supplied by certificate recipients.
     def cell(v):
@@ -915,14 +1239,13 @@ def certificates_export(req:Request,db:Session=Depends(get_db),user=Depends(need
     buffer=io.StringIO()
     writer=csv.writer(buffer)
     writer.writerow(['serial','recipient_en','recipient_ps','recipient_fa','award','program',
-                     'issue_date','valid_until','language','status','verification_url','pdf_sha256'])
+                     'issue_date','valid_until','language','category','status','verification_url','pdf_sha256'])
     base=public_base_url(req)
-    certs=(db.query(Certificate).filter_by(organization_id=user.organization_id)
-           .order_by(Certificate.id.desc()).limit(20000).all())
+    certs=certificate_filter_query(db,user.organization_id,q,category,date_from,date_to,status,template,language).order_by(Certificate.id.desc()).limit(20000).all()
     for cert in certs:
         writer.writerow([cell(cert.serial),cell(cert.recipient_en),cell(cert.recipient_ps),
           cell(cert.recipient_fa),cell(cert.award),cell(cert.program),str(cert.issue_date),
-          str(cert.valid_until or ''),cert.language,cert.status,
+          str(cert.valid_until or ''),cert.language,cert.certificate_category.name if cert.certificate_category else '',cert.status,
           f'{base}/verify/{cert.public_token}',cert.pdf_sha256])
     audit(db,req,user,'certificate.export',details={'exported':len(certs)});db.commit()
     return Response(content='\ufeff'+buffer.getvalue(),media_type='text/csv; charset=utf-8',
@@ -1069,6 +1392,23 @@ def change_password(req:Request,old_password:str=Form(...),new_password:str=Form
     return go('/profile')
 
 
+@app.post('/team/{member_id}/edit')
+def org_user_edit(req:Request,member_id:int,full_name:str=Form(...),email:str=Form(...),
+    role:str=Form(...),db:Session=Depends(get_db),user=Depends(need_manager)):
+    item=db.get(User,member_id)
+    if not item or item.organization_id!=user.organization_id:raise HTTPException(404,'Team member not found')
+    if role not in ('org_admin','issuer','designer','auditor') or len(full_name.strip())<2:
+        raise HTTPException(400,'Invalid team details')
+    if item.id==user.id and role!='org_admin':raise HTTPException(400,'Cannot remove your own organization administrator role')
+    email=email.strip().lower()
+    if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):raise HTTPException(400,'Invalid email')
+    try:
+        item.full_name=full_name.strip()[:160];item.email=email[:254];item.role=role
+        audit(db,req,user,'team.updated',str(item.id));db.commit();flash(req,'Team member updated')
+    except IntegrityError:
+        db.rollback();flash(req,'Email is already in use','error')
+    return go('/team')
+
 @app.post('/team/{member_id}/password')
 def manager_reset_password(req:Request,member_id:int,password:str=Form(...),
                            db:Session=Depends(get_db),user=Depends(need_manager)):
@@ -1099,6 +1439,33 @@ def admin_reset_password(req:Request,user_id:int,password:str=Form(...),
         flash(req,'Password requires at least 12 characters','error');return go('/admin/users')
     audit(db,req,user,'admin.password_reset',str(target.id),organization_id=target.organization_id)
     db.commit();flash(req,'Password reset. Notify the user through a secure channel.')
+    return go('/admin/users')
+
+
+@app.post('/admin/users/{user_id}/edit')
+def admin_user_edit(req:Request,user_id:int,full_name:str=Form(...),email:str=Form(...),
+    role:str=Form(...),db:Session=Depends(get_db),user=Depends(need_admin)):
+    item=db.get(User,user_id)
+    if not item:raise HTTPException(404,'User not found')
+    allowed=('org_admin','issuer','designer','auditor') if item.organization_id else ('superadmin',)
+    email=email.strip().lower()
+    if role not in allowed or len(full_name.strip())<2 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):
+        raise HTTPException(400,'Invalid user details')
+    try:
+        item.full_name=full_name.strip()[:160];item.email=email[:254];item.role=role
+        audit(db,req,user,'user.updated',str(item.id));db.commit();flash(req,'User updated')
+    except IntegrityError:
+        db.rollback();flash(req,'Email is already in use','error')
+    return go('/admin/users')
+
+@app.post('/admin/users/{user_id}/delete')
+def admin_user_delete(req:Request,user_id:int,db:Session=Depends(get_db),user=Depends(need_admin)):
+    account=db.get(User,user_id)
+    if not account:raise HTTPException(404,'User not found')
+    if account.id==user.id:raise HTTPException(400,'Cannot disable your own superadmin account')
+    account.is_active=False
+    audit(db,req,user,'user.archived',str(account.id))
+    db.commit();flash(req,'Account disabled. Audit and issuance references remain intact.')
     return go('/admin/users')
 
 

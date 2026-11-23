@@ -43,3 +43,24 @@ document.addEventListener('click',async(e)=>{
  toggle.addEventListener('click',()=>{mode=mode==='dark'?'light':'dark';set(modeKey,mode);apply()});
  apply();
 })();
+
+/* v5: renew a session-bound CSRF token just before a real form submission.
+   The server still validates every POST; this avoids stale-form failures in tabs
+   left open through login or navigation and preserves clicked approve/reject values. */
+(()=>{'use strict';
+ document.addEventListener('submit',async(event)=>{
+   const form=event.target;
+   if(!(form instanceof HTMLFormElement)||form.method.toLowerCase()!=='post'||form.dataset.csrfRenewed==='yes'){
+     if(form?.dataset?.csrfRenewed==='yes')delete form.dataset.csrfRenewed;
+     return;
+   }
+   const csrf=form.querySelector('input[name="csrf"]');if(!csrf)return;
+   event.preventDefault();const submitter=event.submitter||null;
+   try{
+     const resp=await fetch('/api/session/csrf',{credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}});
+     if(!resp.ok)throw new Error('Cannot update form session');
+     const obj=await resp.json();if(!obj.csrf)throw new Error('Missing form token');
+     csrf.value=obj.csrf;form.dataset.csrfRenewed='yes';form.requestSubmit(submitter||undefined);
+   }catch(error){alert('Your form session could not be renewed. Reload the page and try again.');}
+ },true);
+})();

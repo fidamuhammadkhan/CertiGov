@@ -26,6 +26,19 @@ class Organization(Base):
     users = relationship('User', back_populates='organization')
 
 
+class CertificateCategory(Base):
+    """An organization's editable taxonomy for issued certificates."""
+    __tablename__ = 'certificate_categories'
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False, index=True)
+    slug = Column(String(60), nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(String(320), default='')
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    __table_args__ = (UniqueConstraint('organization_id','slug', name='uq_certificate_category_org_slug'),)
+
+
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
@@ -86,6 +99,7 @@ class Certificate(Base):
     id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False, index=True)
     template_id = Column(Integer, ForeignKey('certificate_templates.id'), nullable=False)
+    category_id = Column(Integer, ForeignKey('certificate_categories.id'), nullable=True, index=True)
     serial = Column(String(64), nullable=False, unique=True, index=True)
     public_token = Column(String(64), nullable=False, unique=True, index=True)
     recipient_en = Column(String(180), nullable=False)
@@ -109,6 +123,7 @@ class Certificate(Base):
     pdf_sha256 = Column(String(64), default='')
     organization = relationship('Organization')
     template = relationship('CertificateTemplate')
+    certificate_category = relationship('CertificateCategory')
 
 
 class AuditEvent(Base):

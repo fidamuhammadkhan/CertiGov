@@ -1,4 +1,4 @@
-import base64, html, io, hashlib, os
+import base64, html, io, hashlib, os, re
 from pathlib import Path
 import qrcode
 from weasyprint import HTML
@@ -50,19 +50,22 @@ def cert_text(cert, org, key):
       '{{serial}}': cert.serial,
       '{{valid_until}}': cert.valid_until.isoformat() if cert.valid_until else '',
       '{{signer}}': 'Authorized signature',
+      '{{category}}': cert.snapshot.get('category_name',''),
     }
     result = key
     for a,b in mapping.items(): result = result.replace(a, b or '')
-    return result
+    fields=(cert.custom or {}).get('values',{}) if isinstance(cert.custom,dict) else {}
+    return re.sub(r'\{\{field:([a-z][a-z0-9_]{0,31})\}\}',lambda m: str(fields.get(m.group(1),''))[:300],result)
 
 
-def certificate_html(cert, org, config, background_path, logo_path, signature_path, verify_url, db=None):
+def certificate_html(cert, org, config, background_path, logo_path, signature_path, verify_url, db=None, photo_path=''):
     # Validate that the immutable snapshot contains only constrained structural content.
     from .catalog import sanitize_design
     c = sanitize_design(config)
     bg = data_image(background_path, db)
     logo = data_image(logo_path, db)
     signature = data_image(signature_path, db)
+    photo = data_image(photo_path, db)
     qr = qr_image(verify_url)
     portrait = c['orientation'] == 'portrait'
     paper_size = '210mm 297mm' if portrait else '297mm 210mm'
@@ -91,9 +94,15 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
     for item in c['elements']:
         if not item['visible']: continue
         kind=item['kind']
+        families={'sans':'Noto Sans Arabic,DejaVu Sans,sans-serif',
+                  'serif':'Noto Naskh Arabic,DejaVu Serif,serif',
+                  'mono':'DejaVu Sans Mono,monospace',
+                  'arabic':'Noto Naskh Arabic,DejaVu Sans,sans-serif'}
         css=(f"left:{item['x']}%;top:{item['y']}%;width:{item['w']}%;"
              f"font-size:{item['size']}px;color:{item['color']};text-align:{item['align']};"
-             f"font-weight:{item['weight']};")
+             f"font-weight:{item['weight']};height:{item['h']}%;"
+             f"font-family:{families.get(item['font'],'sans')};opacity:{item['opacity']};"
+             f"transform:rotate({item['rotate']}deg);")
         content=''
         if kind == 'mask':
             css += f"height:{item['h']}%;background-color:{item['color']};"
@@ -103,6 +112,8 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
             content = ''
         elif kind == 'logo':
             content=f'<img alt="logo" src="{logo}" style="max-width:100%;max-height:100%;height:auto;object-fit:contain">' if logo else '<span>◆</span>'
+        elif kind == 'photo':
+            content=f'<img alt="recipient photo" src="{photo}" style="display:block;width:100%;height:100%;object-fit:contain">' if photo else ''
         elif kind == 'signature':
             content=f'<img alt="signature" src="{signature}" style="max-width:100%;max-height:100%;object-fit:contain">' if signature else '_________________'
         elif kind == 'qr':
@@ -119,15 +130,16 @@ def certificate_html(cert, org, config, background_path, logo_path, signature_pa
     .sheet{{box-sizing:border-box;position:relative;width:{width};height:{height};overflow:hidden;
       background-color:{c['paper']};{frame_styles}{motif}{bg_css}}}
     .element{{position:absolute;box-sizing:border-box;line-height:1.36;word-break:normal;overflow-wrap:anywhere;}}
-    .element.qr img{{display:block}}.element.logo,.element.signature{{height:14%}}
-    .element.qr{{height:20%;background:#fff;padding:3px}}.element.line{{height:1%}}
+    .element.qr img{{display:block}}.element.logo img,.element.signature img,.element.photo img{{max-width:100%;max-height:100%}}
+    .element.qr{{background:#fff;padding:3px}}.element.line{{min-height:2px}}
     </style></head><body><div class="sheet">{''.join(rendered)}</div></body></html>'''
 
 
 def save_certificate_pdf(cert, org, snapshot, public_base_url, db=None):
     url = f'{public_base_url.rstrip("/")}/verify/{cert.public_token}'
     markup = certificate_html(cert,org,snapshot['config'],snapshot.get('background_path',''),
-                              snapshot.get('logo_path',''),snapshot.get('signature_path',''),url, db=db)
+                              snapshot.get('logo_path',''),snapshot.get('signature_path',''),url, db=db,
+                              photo_path=snapshot.get('recipient_photo_path',''))
     pdf = HTML(string=markup).write_pdf()
     filename = f'{cert.public_token}.pdf'
     if os.getenv('STORAGE_BACKEND', 'filesystem') == 'database':
